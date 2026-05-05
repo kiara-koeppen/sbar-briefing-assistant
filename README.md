@@ -21,6 +21,69 @@ The whole stack runs on Databricks: Agent Bricks Knowledge Assistant +
 Databricks App + Lakebase Postgres + Unity Catalog volumes + a Lakeflow Job
 keeping the KA index fresh.
 
+## How it works (the personas)
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                                                                     │
+│  Nina, VP of Operations — the SBAR author                           │
+│                                                                     │
+│   1. Opens /author/drafts/new                                       │
+│   2. Writes a one-paragraph instruction:                            │
+│      "Brief the ELT on the readmission spike. Recommend X."         │
+│   3. Optionally uploads source PDFs                                 │
+│   4. Clicks Generate                                                │
+│                                                                     │
+│         ▼  agent calls KA, drafts SBAR with cited figures           │
+│                                                                     │
+│   5. Reviews and edits the draft (auto-saves)                       │
+│   6. Optional: Regenerate with edits preserved as context           │
+│   7. Clicks Publish                                                 │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+                              │
+                              │  SBAR is now visible to executives
+                              ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                                                                     │
+│  C-suite executives (CEO, CFO, COO, CMO, CNO, Board Chair)          │
+│                                                                     │
+│   1. Open the app, see the latest SBAR                              │
+│   2. Read the briefing (Situation, Background, Assessment,          │
+│      Recommendation)                                                │
+│   3. Click any cited source filename to verify it directly          │
+│   4. Ask follow-up questions in the chat panel                      │
+│   5. KA returns grounded answers with clickable citations           │
+│   6. Thumbs up / down feedback                                      │
+│                                                                     │
+│             ◀────  no meeting required  ────                        │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+                              │
+                              │  every interaction logged to Lakebase
+                              ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                                                                     │
+│  Nina back at /author — the closed loop                             │
+│                                                                     │
+│   1. Opens dashboard                                                │
+│   2. Sees engagement (who viewed, who asked questions)              │
+│   3. Sees knowledge gaps (low-confidence answers flagged in amber)  │
+│   4. Drops the missing supporting doc into the UC volume            │
+│                                                                     │
+│         ▼  Lakeflow Job re-indexes the KA overnight                 │
+│                                                                     │
+│   5. Next executive question gets the better answer                 │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### One-line summary
+Nina drafts an SBAR with an AI assistant that pulls from her organization's
+own corpus, executives self-serve through it without a meeting, and Nina sees
+exactly what they engaged with and where the AI fell short, so she can close
+the gaps before the next briefing cycle.
+
 ## Architecture
 
 ```
@@ -209,6 +272,72 @@ All values are bundle variables in `databricks.yml`. Common changes:
 For prod target, set `targets.prod.workspace.root_path` to a deploy location
 appropriate for your workspace (the default uses
 `${workspace.current_user.userName}` which works for any deployer).
+
+## Production readiness checklist
+
+This is a working prototype that demonstrates the full closed loop. Before a
+customer rolls it out for real executive briefings, here's the honest list of
+what's built, what's partial, and what would need to be added.
+
+### What's production-grade today
+- **OBO auth via X-Forwarded headers.** Each interaction is attributed to the
+  executive's Databricks identity, not to the App SP. The SP is granted
+  least-privilege scoped permissions.
+- **Async KA polling.** Avoids the ~60s Databricks Apps proxy timeout on long
+  LLM responses by dispatching as background tasks plus client-side polling.
+- **Idempotent setup.** Notebooks 01-05 and the Lakeflow refresh job all
+  re-run safely.
+- **Bundle-deployable.** `databricks bundle deploy` reproduces every
+  resource. Variables for catalog, schema, Lakebase instance, and author
+  emails make environment swaps trivial.
+- **Audit log.** Every view, question, answer, source citation, feedback
+  signal, and authoring action is in a single Lakebase table.
+- **Closed-loop knowledge gap detection.** Low-confidence KA answers
+  (heuristic + the agent's own "I don't have" language) get flagged in the
+  author dashboard and clear out automatically once the missing doc is added
+  to the volume.
+- **Source verification.** Every cited filename in the SBAR body and in the
+  chat is clickable and opens the source doc inline.
+
+### What's partial - works for the demo, needs hardening for production
+
+| Gap | What works today | What's needed for production |
+|---|---|---|
+| **Source doc access control** | Every executive can see every supplemental doc | Use the executive's OBO token (not the SP's) when serving `/api/source/*` so UC volume permissions apply per-user |
+| **PDF source ingestion in drafting** | Markdown, txt, .md sources work | Add PDF text extraction (e.g. `pypdf` or Unstructured) so author uploads can be PDFs |
+| **Author UI polish** | Functional textarea editor with auto-save | Rich editor with section anchors (one S/B/A/R section per panel), inline diff after regenerate |
+| **Generation error handling** | Failures land in `generation_failed` status with the error message | Retry with backoff, partial draft recovery, model fallback |
+| **Mobile** | Layout works at desktop sizes | Responsive layout for phones (executives often read briefings on mobile) |
+| **Multi-author** | One author email at a time | Per-author SBAR list view, ownership filters, author-level permissions |
+
+### What's NOT built - decide with the customer
+
+| Thing | What it is | When you'd add it |
+|---|---|---|
+| **Notifications** | Email or Slack alert when a new SBAR is published | Whenever execs aren't already in the habit of opening the app |
+| **Versioning** | If Nina edits a published SBAR, keep history | If briefings get amended after publish |
+| **Search/filter** | Across the SBAR list | Once the corpus passes ~20-30 SBARs |
+| **Identity outside Databricks** | Today the app uses Databricks workspace identity | If executives aren't workspace users; integrate Microsoft Entra or whatever IdP is in place |
+| **Slides export** | Render an SBAR as a slide deck | If the customer's executives prefer slides over text |
+| **PHI redaction or masking** | Manual review today | If the SBAR is healthcare with real patient data, layer in a redaction pass before publish |
+| **Audit retention policy** | Lakebase table grows unbounded | Set a TTL (e.g. partition by month, archive >12 months to Delta) |
+| **Production telemetry analytics** | In-app dashboard reads Lakebase directly | At scale (thousands of interactions/day), add an SDP medallion: Bronze (Lakebase sync), Silver, Gold + AI/BI Lakeview dashboard |
+
+### Suggested first-week production hardening (if customer wants to ship)
+
+1. Wire the App's `/api/source/*` endpoint to use the executive's OBO token
+   for volume reads rather than the SP. About 30 min of code change.
+2. Add PDF text extraction in `lib/llm.py` so authors can upload PDFs to
+   draft from. ~1 hour with `pypdf`.
+3. Build a simple notification job: when a new file lands in `sbar_documents`,
+   send an email or Slack message to the author_emails list. ~2 hours.
+4. Set a Lakebase audit retention policy (e.g. partition by month, archive
+   monthly via a job). ~2 hours.
+5. Decide PHI/compliance posture and document it. Time depends on the
+   customer's data classification.
+
+That's roughly a one- to two-day hardening sprint to get from "live demo" to
+"defensible production rollout for a single team of executives."
 
 ## Key design choices
 

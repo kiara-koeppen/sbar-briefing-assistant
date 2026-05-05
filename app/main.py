@@ -119,10 +119,56 @@ def index(request: Request):
     return RedirectResponse(url=f"/sbar/{latest['id']}" + ("?author=1" if user.is_author else ""))
 
 
+SOURCE_FILENAME_RE = re.compile(r"\b([a-zA-Z][a-zA-Z0-9_-]*\.(md|pdf|txt|docx))\b")
+
+
+def _linkify_sources_in_md(md_text: str) -> str:
+    """Turn references like `pharmacy_callback_pilot_results_2022.md` in the
+    SBAR body into clickable markdown links to /api/source/<filename>. Done
+    on the markdown source (not the rendered HTML) so it composes cleanly
+    with the markdown renderer.
+    Skips text inside fenced code blocks and existing markdown links."""
+    out = []
+    in_code = False
+    for raw_line in md_text.splitlines(keepends=True):
+        if raw_line.strip().startswith("```"):
+            in_code = not in_code
+            out.append(raw_line)
+            continue
+        if in_code:
+            out.append(raw_line)
+            continue
+        # Only linkify filenames that aren't already inside a markdown link.
+        # Heuristic: replace by walking through and skipping inside [text](url).
+        rebuilt = []
+        i = 0
+        while i < len(raw_line):
+            if raw_line[i] == "[":
+                # find matching ](...) and pass through unchanged
+                close_bracket = raw_line.find("]", i)
+                if close_bracket != -1 and close_bracket + 1 < len(raw_line) and raw_line[close_bracket + 1] == "(":
+                    close_paren = raw_line.find(")", close_bracket)
+                    if close_paren != -1:
+                        rebuilt.append(raw_line[i:close_paren + 1])
+                        i = close_paren + 1
+                        continue
+            m = SOURCE_FILENAME_RE.match(raw_line, i)
+            if m:
+                fn = m.group(1)
+                rebuilt.append(f"[{fn}](/api/source/{fn})")
+                i = m.end()
+            else:
+                rebuilt.append(raw_line[i])
+                i += 1
+        out.append("".join(rebuilt))
+    return "".join(out)
+
+
 @app.get("/sbar/{sbar_id}", response_class=HTMLResponse)
 def view_sbar(request: Request, sbar_id: str):
     user = _user(request)
     md = _read_sbar(sbar_id)
+    md = _linkify_sources_in_md(md)
     html = markdown.markdown(md, extensions=["tables", "fenced_code"])
     sbars = _list_sbars()
     title = next((s["title"] for s in sbars if s["id"] == sbar_id), sbar_id)
