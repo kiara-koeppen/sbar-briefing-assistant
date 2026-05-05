@@ -158,8 +158,20 @@ def generate_draft(
         tool_calls = msg.get("tool_calls") or []
 
         if not tool_calls:
+            text = (msg.get("content") or "").strip()
+            # Strip any preamble before the first H1 heading. Even with explicit
+            # prompting the model occasionally narrates ("I now have enough
+            # context...") before the SBAR. We want the published markdown to
+            # start with the title.
+            idx = text.find("\n# ")
+            if idx == -1 and text.startswith("# "):
+                clean = text
+            elif idx != -1:
+                clean = text[idx + 1:]
+            else:
+                clean = text
             return {
-                "markdown": (msg.get("content") or "").strip(),
+                "markdown": clean.strip(),
                 "corpus_searches": corpus_searches,
                 "turns_used": turn + 1,
             }

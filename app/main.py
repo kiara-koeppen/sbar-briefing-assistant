@@ -165,12 +165,24 @@ def _linkify_sources_in_md(md_text: str) -> str:
     return "".join(out)
 
 
+def _open_sources_in_new_tab(html: str) -> str:
+    """Add target='_blank' rel='noopener' to any anchor pointing at the source
+    viewer. Done as a post-render regex so it composes with whatever the
+    markdown renderer produced."""
+    return re.sub(
+        r'<a href="(/api/source/[^"]+)"',
+        r'<a href="\1" target="_blank" rel="noopener"',
+        html,
+    )
+
+
 @app.get("/sbar/{sbar_id}", response_class=HTMLResponse)
 def view_sbar(request: Request, sbar_id: str):
     user = _user(request)
     md = _read_sbar(sbar_id)
     md = _linkify_sources_in_md(md)
     html = markdown.markdown(md, extensions=["tables", "fenced_code"])
+    html = _open_sources_in_new_tab(html)
     sbars = _list_sbars()
     title = next((s["title"] for s in sbars if s["id"] == sbar_id), sbar_id)
 
@@ -580,7 +592,11 @@ async def publish_draft(request: Request, draft_id: str):
     # Delivered or not, we record the attempt so the author dashboard can
     # show that publish triggered a broadcast.
     sbar_title = next((s["title"] for s in _list_sbars() if s["id"] == sbar_id), draft.get("title") or sbar_id)
-    app_url = str(request.base_url).rstrip("/")
+    # request.base_url returns the internal localhost URL on Databricks Apps.
+    # The Host header carries the externally-facing hostname.
+    host_header = request.headers.get("x-forwarded-host") or request.headers.get("host", "")
+    scheme = request.headers.get("x-forwarded-proto", "https")
+    app_url = f"{scheme}://{host_header}" if host_header else str(request.base_url).rstrip("/")
     notify_audit = notify_published(
         title=sbar_title, author_email=user.email,
         sbar_id=sbar_id, app_url=app_url,
