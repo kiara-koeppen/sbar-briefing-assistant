@@ -28,8 +28,15 @@ resources:
             permission: CAN_CONNECT_AND_CREATE
 
         - name: sbar-volume
-          description: "UC volume of SBAR markdown documents"
+          description: "UC volume of SBAR markdown documents (read for executive view, write for publishing drafts)"
           uc_securable:
             securable_full_name: ${var.catalog}.${resources.schemas.sbar_briefing_schema.name}.${var.sbar_volume}
             securable_type: VOLUME
-            permission: READ_VOLUME
+            permission: WRITE_VOLUME
+
+        - name: draft-inputs-volume
+          description: "UC volume for per-draft source documents (read+write so the App can save uploads)"
+          uc_securable:
+            securable_full_name: ${var.catalog}.${resources.schemas.sbar_briefing_schema.name}.${var.draft_inputs_volume}
+            securable_type: VOLUME
+            permission: WRITE_VOLUME

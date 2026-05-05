@@ -21,6 +21,10 @@ variables:
     description: "UC volume that holds supplemental documents the Knowledge Assistant grounds on."
     default: "supplemental_docs"
 
+  draft_inputs_volume:
+    description: "UC volume for per-draft source documents uploaded by authors."
+    default: "draft_inputs"
+
   lakebase_instance:
     description: "Existing Lakebase Provisioned instance to use for the audit log. Created out-of-band."
     default: "hls-lakebase-demo"

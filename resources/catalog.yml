@@ -19,3 +19,10 @@ resources:
       name: ${var.supplemental_volume}
       volume_type: MANAGED
       comment: "Supplemental materials the KA grounds on (KPI exports, prior SBARs, policy docs)"
+
+    draft_inputs:
+      catalog_name: ${var.catalog}
+      schema_name: ${resources.schemas.sbar_briefing_schema.name}
+      name: ${var.draft_inputs_volume}
+      volume_type: MANAGED
+      comment: "Per-draft source documents uploaded by authors for the agentic SBAR draft generator"

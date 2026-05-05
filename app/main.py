@@ -7,6 +7,8 @@ Two surfaces:
 All KA interactions and SBAR views are logged to the Lakebase audit_events table.
 """
 import os
+import io
+import re
 import uuid
 import json
 import asyncio
@@ -15,7 +17,7 @@ import pathlib
 from datetime import datetime, timezone
 
 import markdown
-from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
+from fastapi import FastAPI, Request, HTTPException, BackgroundTasks, UploadFile, File, Form
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -24,6 +26,8 @@ from databricks.sdk import WorkspaceClient
 from lib.auth import current_user, CurrentUser
 from lib.db import insert_event, query
 from lib.ka import ask as ka_ask
+from lib import drafts as drafts_lib
+from lib.llm import generate_draft
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -268,6 +272,240 @@ def author_view(request: Request, sbar_id: str | None = None):
         "engagement": engagement_rows,
         "questions": question_rows,
     })
+
+
+# =============================================================================
+# Auto-SBAR drafting flow
+# =============================================================================
+
+# In-process draft generation status keyed by draft_id.
+_DRAFT_GEN: dict[str, dict] = {}
+
+
+def _slugify(text: str) -> str:
+    s = re.sub(r"[^a-zA-Z0-9]+", "_", text.lower()).strip("_")
+    return s[:60] or "untitled"
+
+
+def _read_volume_text(volume_path: str, max_bytes: int = 200_000) -> str:
+    """Read a UC volume file as text. Truncates at max_bytes to keep prompt
+    sizes reasonable. Returns an empty string on any read failure."""
+    try:
+        resp = _workspace_client.files.download(volume_path)
+        raw = resp.contents.read(max_bytes + 1)
+        if len(raw) > max_bytes:
+            return raw[:max_bytes].decode("utf-8", errors="replace") + "\n\n[truncated]"
+        return raw.decode("utf-8", errors="replace")
+    except Exception:
+        log.exception(f"failed to read {volume_path}")
+        return ""
+
+
+@app.get("/author/drafts/new", response_class=HTMLResponse)
+def new_draft_form(request: Request):
+    user = _user(request)
+    if not user.is_author:
+        return HTMLResponse("<h1>403 Not the SBAR author.</h1>", status_code=403)
+    return templates.TemplateResponse("author_draft_new.html", {"request": request, "user": user})
+
+
+@app.post("/api/drafts")
+async def create_draft(request: Request):
+    body = await request.json()
+    user = _user(request)
+    if not user.is_author:
+        raise HTTPException(status_code=403, detail="Not the SBAR author.")
+    draft_id = drafts_lib.create_draft(
+        author_email=user.email,
+        title=body.get("title", "").strip() or "Untitled SBAR",
+        audience=body.get("audience", "").strip() or "Executive Leadership Team",
+        instruction=body.get("instruction", "").strip(),
+    )
+    insert_event(
+        user_email=user.email, user_role=user.role_label,
+        session_id=draft_id, sbar_id=None, event_type="draft_created",
+        payload={"draft_id": draft_id, "title": body.get("title", ""),
+                 "audience": body.get("audience", "")},
+    )
+    return {"draft_id": draft_id}
+
+
+@app.post("/api/drafts/{draft_id}/upload")
+async def upload_draft_source(draft_id: str, request: Request, file: UploadFile = File(...)):
+    user = _user(request)
+    if not user.is_author:
+        raise HTTPException(status_code=403, detail="Not the SBAR author.")
+    draft = drafts_lib.get_draft(draft_id)
+    if not draft:
+        raise HTTPException(status_code=404, detail="draft not found")
+
+    # Sanitize filename and write into the per-draft folder on the volume.
+    raw_name = file.filename or "upload"
+    safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", raw_name)[:120]
+    volume_path = f"{drafts_lib.draft_inputs_path(draft_id)}/{safe_name}"
+
+    contents = await file.read()
+    _workspace_client.files.upload(volume_path, io.BytesIO(contents), overwrite=True)
+    drafts_lib.add_source_file(draft_id, safe_name, volume_path)
+
+    return {"filename": safe_name, "volume_path": volume_path, "size": len(contents)}
+
+
+@app.post("/api/drafts/{draft_id}/generate")
+async def generate_draft_endpoint(draft_id: str, request: Request, background: BackgroundTasks):
+    user = _user(request)
+    if not user.is_author:
+        raise HTTPException(status_code=403, detail="Not the SBAR author.")
+    draft = drafts_lib.get_draft(draft_id)
+    if not draft:
+        raise HTTPException(status_code=404, detail="draft not found")
+
+    body = await request.json() if await request.body() else {}
+    use_current_as_context = bool(body.get("regenerate", False))
+
+    drafts_lib.set_status(draft_id, "generating", error_message=None)
+    _DRAFT_GEN[draft_id] = {"status": "running"}
+
+    insert_event(
+        user_email=user.email, user_role=user.role_label,
+        session_id=draft_id, sbar_id=None,
+        event_type=("draft_regenerated" if use_current_as_context else "draft_generation_started"),
+        payload={"draft_id": draft_id, "had_prior_edits": bool(draft.get("current_md")) and use_current_as_context},
+    )
+
+    def _run_generation():
+        try:
+            sources = []
+            for src in (draft.get("source_files") or []):
+                content = _read_volume_text(src["volume_path"])
+                if content:
+                    sources.append({"filename": src["filename"], "content": content})
+
+            current_md = draft.get("current_md") if use_current_as_context else None
+
+            result = generate_draft(
+                author_email=user.email,
+                instruction=draft.get("instruction") or "",
+                title=draft.get("title") or "Untitled SBAR",
+                audience=draft.get("audience") or "Executive Leadership Team",
+                source_docs=sources,
+                current_draft=current_md,
+            )
+
+            drafts_lib.update_draft_fields(
+                draft_id,
+                current_md=result["markdown"],
+                corpus_searches=result["corpus_searches"],
+                status="draft",
+                error_message=None,
+            )
+            insert_event(
+                user_email=user.email, user_role=user.role_label,
+                session_id=draft_id, sbar_id=None,
+                event_type="draft_generation_completed",
+                payload={"draft_id": draft_id, "turns_used": result["turns_used"],
+                         "corpus_search_count": len(result["corpus_searches"])},
+            )
+            _DRAFT_GEN[draft_id] = {"status": "done"}
+        except Exception as e:
+            log.exception("draft generation failed")
+            drafts_lib.set_status(draft_id, "generation_failed", error_message=str(e))
+            insert_event(
+                user_email=user.email, user_role=user.role_label,
+                session_id=draft_id, sbar_id=None,
+                event_type="draft_generation_failed",
+                payload={"draft_id": draft_id, "error": str(e)[:500]},
+            )
+            _DRAFT_GEN[draft_id] = {"status": "error", "error": str(e)}
+
+    background.add_task(_run_generation)
+    return {"status": "generating"}
+
+
+@app.get("/author/drafts/{draft_id}", response_class=HTMLResponse)
+def view_draft(request: Request, draft_id: str):
+    user = _user(request)
+    if not user.is_author:
+        return HTMLResponse("<h1>403 Not the SBAR author.</h1>", status_code=403)
+    draft = drafts_lib.get_draft(draft_id)
+    if not draft:
+        return HTMLResponse("<h1>404 draft not found</h1>", status_code=404)
+    return templates.TemplateResponse("author_draft_edit.html", {
+        "request": request, "user": user, "draft": draft,
+    })
+
+
+@app.get("/api/drafts/{draft_id}")
+def get_draft_json(request: Request, draft_id: str):
+    user = _user(request)
+    if not user.is_author:
+        raise HTTPException(status_code=403)
+    draft = drafts_lib.get_draft(draft_id)
+    if not draft:
+        raise HTTPException(status_code=404)
+    # Convert datetimes to iso strings so JSON serialization is happy.
+    for k in ("created_at", "updated_at", "published_at"):
+        if draft.get(k):
+            draft[k] = draft[k].isoformat()
+    return draft
+
+
+@app.patch("/api/drafts/{draft_id}")
+async def patch_draft(request: Request, draft_id: str):
+    user = _user(request)
+    if not user.is_author:
+        raise HTTPException(status_code=403)
+    body = await request.json()
+    fields = {}
+    if "current_md" in body:
+        fields["current_md"] = body["current_md"]
+        insert_event(
+            user_email=user.email, user_role=user.role_label,
+            session_id=draft_id, sbar_id=None, event_type="draft_edited",
+            payload={"draft_id": draft_id, "length": len(body["current_md"])},
+        )
+    if "title" in body:
+        fields["title"] = body["title"]
+    if "audience" in body:
+        fields["audience"] = body["audience"]
+    if "instruction" in body:
+        fields["instruction"] = body["instruction"]
+    if not fields:
+        return {"ok": True}
+    drafts_lib.update_draft_fields(draft_id, **fields)
+    return {"ok": True}
+
+
+@app.post("/api/drafts/{draft_id}/publish")
+async def publish_draft(request: Request, draft_id: str):
+    user = _user(request)
+    if not user.is_author:
+        raise HTTPException(status_code=403)
+    draft = drafts_lib.get_draft(draft_id)
+    if not draft:
+        raise HTTPException(status_code=404)
+    md = draft.get("current_md")
+    if not md:
+        raise HTTPException(status_code=400, detail="draft has no markdown yet")
+
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    sbar_id = f"sbar_{today}_{_slugify(draft.get('title') or 'untitled')}"
+    target_path = f"{SBAR_VOLUME_PATH}/{sbar_id}.md"
+
+    _workspace_client.files.upload(target_path, io.BytesIO(md.encode("utf-8")), overwrite=False)
+
+    drafts_lib.update_draft_fields(
+        draft_id,
+        status="published",
+        published_at=datetime.now(timezone.utc),
+        published_sbar_id=sbar_id,
+    )
+    insert_event(
+        user_email=user.email, user_role=user.role_label,
+        session_id=draft_id, sbar_id=sbar_id, event_type="draft_published",
+        payload={"draft_id": draft_id, "sbar_id": sbar_id},
+    )
+    return {"sbar_id": sbar_id, "url": f"/sbar/{sbar_id}"}
 
 
 @app.get("/healthz")
