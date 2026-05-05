@@ -1,0 +1,21 @@
+resources:
+  schemas:
+    sbar_briefing_schema:
+      catalog_name: ${var.catalog}
+      name: ${var.schema}
+      comment: "Executive SBAR Briefing Assistant demo (managed by DAB)"
+
+  volumes:
+    sbar_documents:
+      catalog_name: ${var.catalog}
+      schema_name: ${resources.schemas.sbar_briefing_schema.name}
+      name: ${var.sbar_volume}
+      volume_type: MANAGED
+      comment: "Current and historical SBAR briefing documents (markdown)"
+
+    supplemental_docs:
+      catalog_name: ${var.catalog}
+      schema_name: ${resources.schemas.sbar_briefing_schema.name}
+      name: ${var.supplemental_volume}
+      volume_type: MANAGED
+      comment: "Supplemental materials the KA grounds on (KPI exports, prior SBARs, policy docs)"

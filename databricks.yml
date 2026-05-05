@@ -1,0 +1,72 @@
+bundle:
+  name: sbar-briefing-assistant
+
+include:
+  - resources/*.yml
+
+variables:
+  catalog:
+    description: "Unity Catalog where the demo schema and volumes live. Must exist before deploy."
+    default: "kk_test"
+
+  schema:
+    description: "UC schema for SBAR resources."
+    default: "sbar_briefing"
+
+  sbar_volume:
+    description: "UC volume that holds the SBAR markdown documents."
+    default: "sbar_documents"
+
+  supplemental_volume:
+    description: "UC volume that holds supplemental documents the Knowledge Assistant grounds on."
+    default: "supplemental_docs"
+
+  lakebase_instance:
+    description: "Existing Lakebase Provisioned instance to use for the audit log. Created out-of-band."
+    default: "hls-lakebase-demo"
+
+  lakebase_pg_database:
+    description: "Postgres database inside the Lakebase instance for the audit table."
+    default: "sbar_briefing"
+
+  lakebase_pg_schema:
+    description: "Postgres schema for the audit table."
+    default: "sbar"
+
+  ka_display_name:
+    description: "Display name of the Agent Bricks Knowledge Assistant."
+    default: "SBAR Briefing Assistant"
+
+  ka_endpoint_name:
+    description: "Serving endpoint name of the KA. Populated after the setup job runs."
+    default: "ka-3306ffae-endpoint"
+
+  author_emails:
+    description: "Comma-separated list of emails entitled to the Author View."
+    default: "kiara.koeppen@databricks.com"
+
+  app_name:
+    description: "Databricks App name."
+    default: "sbar-briefing-assistant"
+
+  app_service_principal_id:
+    description: "Client ID of the App service principal. Populated after the App is created."
+    default: ""
+
+targets:
+  dev:
+    default: true
+    mode: development
+    workspace:
+      profile: kk_test
+
+  prod:
+    mode: production
+    workspace:
+      profile: kk_test
+      # Customers should change this to a path under their deploying user or
+      # a shared production location (e.g. /Workspace/Shared/sbar-briefing).
+      # Production mode requires an explicit root_path.
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
+    variables:
+      app_name: "sbar-briefing-assistant"

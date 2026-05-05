@@ -1,0 +1,79 @@
+resources:
+  jobs:
+    sbar_setup:
+      name: "sbar-briefing-setup"
+      description: |
+        One-shot bootstrap. Generates synthetic SBAR content, creates the
+        Knowledge Assistant, and provisions the Lakebase audit table.
+        Run manually after `databricks bundle deploy`. Idempotent.
+
+      tasks:
+        - task_key: generate_content
+          notebook_task:
+            notebook_path: ../notebooks/01_generate_synthetic_content.py
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${resources.schemas.sbar_briefing_schema.name}
+              sbar_volume: ${var.sbar_volume}
+              supplemental_volume: ${var.supplemental_volume}
+          environment_key: default-env
+
+        - task_key: create_knowledge_assistant
+          depends_on:
+            - task_key: generate_content
+          notebook_task:
+            notebook_path: ../notebooks/02_create_knowledge_assistant.py
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${resources.schemas.sbar_briefing_schema.name}
+              supplemental_volume: ${var.supplemental_volume}
+              ka_display_name: ${var.ka_display_name}
+          environment_key: default-env
+
+        - task_key: provision_lakebase
+          notebook_task:
+            notebook_path: ../notebooks/03_provision_lakebase_audit.py
+            base_parameters:
+              lakebase_instance: ${var.lakebase_instance}
+              pg_database: ${var.lakebase_pg_database}
+              pg_schema: ${var.lakebase_pg_schema}
+              seed_data: "true"
+          environment_key: default-env
+
+      environments:
+        - environment_key: default-env
+          spec:
+            client: "4"
+            dependencies:
+              - "psycopg2-binary"
+              - "databricks-sdk>=0.100.0"
+
+      max_concurrent_runs: 1
+
+    sbar_ka_refresh:
+      name: "sbar-briefing-ka-refresh"
+      description: |
+        Nightly refresh of the Knowledge Assistant index. Picks up any new or
+        updated documents in the supplemental_docs volume so executives'
+        next questions reflect the latest content.
+
+      tasks:
+        - task_key: refresh_ka
+          notebook_task:
+            notebook_path: ../jobs/refresh_ka_index.py
+            base_parameters:
+              ka_display_name: ${var.ka_display_name}
+          environment_key: default-env
+          timeout_seconds: 900
+
+      environments:
+        - environment_key: default-env
+          spec:
+            client: "4"
+            dependencies:
+              - "databricks-sdk>=0.100.0"
+
+      schedule:
+        quartz_cron_expression: "0 0 6 * * ?"
+        timezone_id: "America/Denver"
+        pause_status: PAUSED

@@ -142,43 +142,73 @@ sbar-briefing-assistant/
 - An existing Lakebase Provisioned instance (`hls-lakebase-demo`) — the demo
   reuses an existing instance to save provisioning time
 
-## Deploy from scratch
+## Deploy via Databricks Asset Bundle
 
-The pieces below were built incrementally during the original session.
-To redeploy the whole thing:
+The whole thing is wrapped in a DAB. From a fresh checkout:
 
+### Prerequisites (one-time)
+1. **Catalog**. The bundle assumes the catalog already exists (catalogs are
+   typically managed at workspace level, not by an app bundle). If yours
+   doesn't exist, create it first or update `var.catalog` in `databricks.yml`.
+2. **Lakebase instance**. The bundle reuses an existing Lakebase Provisioned
+   instance — it doesn't create one. Create one in the workspace UI (CU_1
+   tier is fine for the demo) and update `var.lakebase_instance` in
+   `databricks.yml` to its name.
+3. **CLI profile**. Update `targets.dev.workspace.profile` and
+   `targets.prod.workspace.profile` to match your `~/.databrickscfg` profile.
+
+### Deploy
 ```bash
-# 1. Create catalog/schema/volumes (in the Databricks workspace UI or via SDK)
-#    catalog: kk_test
-#    schema:  kk_test.sbar_briefing
-#    volumes: sbar_documents, supplemental_docs
+# Validate first - catches typos before anything hits the workspace.
+databricks bundle validate -t prod
 
-# 2. Run the setup notebooks (in order)
-#    - 01_generate_synthetic_content.py   (writes SBAR markdown + 18 supp docs)
-#    - 02_create_knowledge_assistant.py   (creates the KA + source binding, waits for ACTIVE)
-#    - 03_provision_lakebase_audit.py     (PG database, audit_events table, seed data)
+# Deploy. Creates schema, volumes, jobs, and the App (without source code yet).
+databricks bundle deploy -t prod
 
-# 3. Grant the App SP privileges on the sbar Postgres schema
-#    (after the App is created so its client_id is known):
-#    GRANT USAGE ON SCHEMA sbar TO "<sp_client_id>";
-#    GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA sbar TO "<sp_client_id>";
-#    ALTER DEFAULT PRIVILEGES IN SCHEMA sbar
-#      GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "<sp_client_id>";
+# Run the one-shot setup job. Generates synthetic SBARs + supplemental docs,
+# creates the Knowledge Assistant, provisions the Lakebase audit table.
+# Idempotent - safe to re-run.
+databricks bundle run sbar_setup -t prod
 
-# 4. Upload app source to the workspace and create the App
-databricks workspace import-dir ./app /Workspace/Users/$EMAIL/sbar-briefing-assistant/app --profile <profile> --overwrite
-databricks apps create sbar-briefing-assistant --source-code-path /Workspace/Users/$EMAIL/sbar-briefing-assistant/app --profile <profile>
+# Update KA_ENDPOINT_NAME in app/app.yaml to match the endpoint name
+# the setup job created (printed at the end of notebook 02). Then redeploy:
+databricks bundle deploy -t prod
 
-# 5. Add resource bindings via the App UI:
-#    - serving-endpoint: ka-3306ffae-endpoint (Can Query)
-#    - database: hls-lakebase-demo / sbar_briefing (Can connect and create)
-#    - volume: kk_test.sbar_briefing.sbar_documents (Read)
-
-# 6. Grant SP READ_VOLUME + USE_CATALOG/USE_SCHEMA via UC
-databricks api post /api/2.1/unity-catalog/permissions/volume/kk_test.sbar_briefing.sbar_documents ...
-
-# 7. Create the nightly Lakeflow Job for KA reindex (see jobs/refresh_ka_index.py)
+# Start the App.
+databricks bundle run sbar_briefing_assistant -t prod
 ```
+
+### Post-deploy: grant Postgres privileges on the audit schema
+The DAB binds Lakebase to the App with `CAN_CONNECT_AND_CREATE`. That lets
+the App connect, but it doesn't grant access to the existing `sbar` schema.
+After the App is created, the App's service principal client_id becomes its
+Postgres role name. Run this once (using a Postgres user that owns the schema):
+
+```sql
+GRANT USAGE ON SCHEMA sbar TO "<sp_client_id>";
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA sbar TO "<sp_client_id>";
+ALTER DEFAULT PRIVILEGES IN SCHEMA sbar
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "<sp_client_id>";
+```
+
+### Switch the nightly KA refresh job from PAUSED to UNPAUSED
+The bundle ships the schedule paused so the customer can decide when to
+turn it on. In the Jobs UI, open `sbar-briefing-ka-refresh` and resume the
+schedule. Or edit `resources/jobs.yml` and set `pause_status: UNPAUSED`.
+
+### Customizing for your workspace
+All values are bundle variables in `databricks.yml`. Common changes:
+
+| Variable | What to update |
+|---|---|
+| `catalog` | Your UC catalog name |
+| `lakebase_instance` | Your Lakebase Provisioned instance name |
+| `author_emails` | Comma-separated list of SBAR-author emails |
+| `app_name` | App name (also affects URL) |
+
+For prod target, set `targets.prod.workspace.root_path` to a deploy location
+appropriate for your workspace (the default uses
+`${workspace.current_user.userName}` which works for any deployer).
 
 ## Key design choices
 
