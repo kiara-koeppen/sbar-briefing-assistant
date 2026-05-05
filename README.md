@@ -9,6 +9,28 @@ improvement view for the SBAR author.
 
 ---
 
+> ## Disclaimer
+>
+> This project is **not an official Databricks product**. It is an unofficial
+> demo built by a Databricks employee for educational and customer-walkthrough
+> purposes. It is provided **as-is**, with no warranties, no SLA, and no
+> implied or expressed support commitment from Databricks.
+>
+> All sample data in this repository (SBAR contents, supplemental documents,
+> KPI numbers, executive personas, contract terms, the "Regional Health System"
+> name, etc.) is **synthetic and fictional**. Any resemblance to real
+> organizations, individuals, contracts, or clinical situations is
+> coincidental.
+>
+> The code, architecture patterns, and design decisions here are shared
+> openly for reference, but customers and partners adopting any of this for
+> their own use are responsible for their own security, compliance, privacy,
+> and operational reviews. In particular, anyone considering this for use
+> with Protected Health Information (PHI) or other regulated data should
+> conduct an independent compliance assessment before production rollout.
+
+---
+
 ## TL;DR
 
 Senior healthcare executives spend hours every two weeks walking peers through
