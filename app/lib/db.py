@@ -17,7 +17,8 @@ _token_cache: dict = {"token": None, "expires_at": 0.0}
 
 
 def _get_password() -> str:
-    """Auto-injected PGPASSWORD when bound; otherwise generate via SDK."""
+    """Generate a Lakebase OAuth token via REST. Works regardless of SDK version.
+    Cached for ~50 min (tokens are valid for 1 hr)."""
     if pg_password := os.getenv("PGPASSWORD"):
         return pg_password
 
@@ -28,13 +29,22 @@ def _get_password() -> str:
         from databricks.sdk import WorkspaceClient
         instance = os.getenv("LAKEBASE_INSTANCE", "hls-lakebase-demo")
         w = WorkspaceClient()
-        cred = w.database.generate_database_credential(
-            request_id=f"sbar-app-{int(now)}",
-            instance_names=[instance],
-        )
-        _token_cache["token"] = cred.token
-        _token_cache["expires_at"] = now + 50 * 60  # ~50 min
-        return cred.token
+        # Try the modern SDK shape first; fall back to REST for older runtimes.
+        try:
+            cred = w.database.generate_database_credential(
+                request_id=f"sbar-app-{int(now)}",
+                instance_names=[instance],
+            )
+            token = cred.token
+        except AttributeError:
+            resp = w.api_client.do(
+                "POST", "/api/2.0/database/credentials",
+                body={"request_id": f"sbar-app-{int(now)}", "instance_names": [instance]},
+            )
+            token = resp["token"]
+        _token_cache["token"] = token
+        _token_cache["expires_at"] = now + 50 * 60
+        return token
 
 
 def _get_host() -> str:
@@ -43,7 +53,11 @@ def _get_host() -> str:
     from databricks.sdk import WorkspaceClient
     instance = os.getenv("LAKEBASE_INSTANCE", "hls-lakebase-demo")
     w = WorkspaceClient()
-    return w.database.get_database_instance(name=instance).read_write_dns
+    try:
+        return w.database.get_database_instance(name=instance).read_write_dns
+    except AttributeError:
+        resp = w.api_client.do("GET", f"/api/2.0/database/instances/{instance}")
+        return resp["read_write_dns"]
 
 
 def _get_user() -> str:

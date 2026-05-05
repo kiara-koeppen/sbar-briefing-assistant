@@ -19,6 +19,7 @@ from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from databricks.sdk import WorkspaceClient
 
 from lib.auth import current_user, CurrentUser
 from lib.db import insert_event, query
@@ -28,12 +29,30 @@ logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
 APP_ROOT = pathlib.Path(__file__).parent
-SBAR_VOLUME = pathlib.Path(os.getenv("SBAR_VOLUME_PATH", "/Volumes/kk_test/sbar_briefing/sbar_documents"))
+SBAR_VOLUME_PATH = os.getenv("SBAR_VOLUME_PATH", "/Volumes/kk_test/sbar_briefing/sbar_documents")
 AUTHOR_EMAILS = {e.strip() for e in os.getenv("AUTHOR_USER_EMAILS", "").split(",") if e.strip()}
+
+# Databricks Apps run sandboxed - /Volumes is not auto-mounted on the filesystem.
+# Use the SDK's Files API for volume reads/writes.
+_workspace_client = WorkspaceClient()
 
 app = FastAPI(title="SBAR Briefing Assistant")
 app.mount("/static", StaticFiles(directory=APP_ROOT / "static"), name="static")
 templates = Jinja2Templates(directory=APP_ROOT / "templates")
+
+
+@app.on_event("startup")
+def _startup_diag():
+    try:
+        entries = list(_workspace_client.files.list_directory_contents(SBAR_VOLUME_PATH))
+        log.info(f"SBAR volume contains {len(entries)} entries")
+    except Exception as e:
+        log.exception(f"Volume list failed: {e}")
+    log.info(
+        f"PG env: PGHOST={os.getenv('PGHOST')!r} PGDATABASE={os.getenv('PGDATABASE')!r} "
+        f"PGUSER={os.getenv('PGUSER')!r} PGPASSWORD_set={'PGPASSWORD' in os.environ} "
+        f"PGSSLMODE={os.getenv('PGSSLMODE')!r}"
+    )
 
 
 # In-process pending answers keyed by question_id.
@@ -47,25 +66,38 @@ def _user(request: Request) -> CurrentUser:
 
 
 def _list_sbars() -> list[dict]:
-    files = sorted(SBAR_VOLUME.glob("*.md"))
+    """List markdown SBARs in the UC volume via the Files API."""
     out = []
-    for f in files:
-        with open(f) as fh:
-            first_line = fh.readline().strip().lstrip("# ").strip()
-        out.append({
-            "id": f.stem,
-            "title": first_line,
-            "modified": datetime.fromtimestamp(f.stat().st_mtime, tz=timezone.utc).isoformat(),
-        })
-    out.sort(key=lambda x: x["modified"], reverse=True)
+    try:
+        for entry in _workspace_client.files.list_directory_contents(SBAR_VOLUME_PATH):
+            if entry.is_directory or not (entry.name or "").endswith(".md"):
+                continue
+            content = _read_sbar_path(entry.path)
+            first_line = content.splitlines()[0].strip().lstrip("# ").strip() if content else entry.name
+            out.append({
+                "id": entry.name[:-3],
+                "title": first_line,
+                "modified": datetime.fromtimestamp((entry.last_modified or 0) / 1000, tz=timezone.utc).isoformat() if entry.last_modified else "",
+            })
+    except Exception:
+        log.exception("Failed to list SBARs")
+    # SBAR file IDs encode the briefing cycle number (e.g. sbar_2025_q4_06_*).
+    # Sort by id desc so the most recent cycle is the default.
+    out.sort(key=lambda x: x["id"], reverse=True)
     return out
 
 
+def _read_sbar_path(path: str) -> str:
+    resp = _workspace_client.files.download(path)
+    return resp.contents.read().decode("utf-8")
+
+
 def _read_sbar(sbar_id: str) -> str:
-    path = SBAR_VOLUME / f"{sbar_id}.md"
-    if not path.exists():
-        raise HTTPException(status_code=404, detail=f"SBAR not found: {sbar_id}")
-    return path.read_text()
+    path = f"{SBAR_VOLUME_PATH}/{sbar_id}.md"
+    try:
+        return _read_sbar_path(path)
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"SBAR not found: {sbar_id} ({e})")
 
 
 @app.get("/", response_class=HTMLResponse)

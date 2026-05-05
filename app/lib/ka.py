@@ -31,7 +31,10 @@ def ask(question: str, history: list[dict] | None = None, *, timeout: float = 50
     """
     cfg = Config()
     endpoint = os.getenv("KA_ENDPOINT_NAME", "ka-3306ffae-endpoint")
-    url = f"https://{cfg.host}/serving-endpoints/{endpoint}/invocations"
+    base = cfg.host.rstrip("/")
+    if not base.startswith("http"):
+        base = f"https://{base}"
+    url = f"{base}/serving-endpoints/{endpoint}/invocations"
     headers = cfg.authenticate()
     headers["Content-Type"] = "application/json"
 
@@ -75,12 +78,16 @@ def _parse_response(data: dict) -> dict:
     if not answer:
         answer = "(no answer returned)"
 
-    # Heuristic: if KA explicitly says it doesn't have the data, flag as low-confidence.
+    # Heuristic: detect when the KA says it doesn't have data to answer a question.
+    # Triggered phrases mirror the KA's "absent corpus" language.
     lower = answer.lower()
     low_conf_phrases = [
-        "i don't have", "i do not have", "would need to be added",
-        "not in the supplemental materials", "cannot be answered",
-        "no document", "would be needed",
+        "i don't have", "i do not have",
+        "do not contain", "does not contain", "doesn't contain",
+        "no document", "no record", "no information",
+        "would need", "would be needed",
+        "not in the supplemental", "not available in the corpus",
+        "cannot be answered", "cannot be determined",
     ]
     low_confidence = any(p in lower for p in low_conf_phrases)
 
