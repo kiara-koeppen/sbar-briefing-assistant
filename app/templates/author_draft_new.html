@@ -1,0 +1,74 @@
+{% extends "_layout.html" %}
+{% block title %}New SBAR Draft{% endblock %}
+{% block content %}
+<div class="draft-new">
+  <h1>Draft a new SBAR</h1>
+  <p class="muted">Provide a brief instruction, upload any source documents, and the assistant will produce a draft you can edit and publish.</p>
+
+  <form id="draft-form" class="draft-form" onsubmit="return false;">
+    <label>Title
+      <input type="text" id="title" name="title" placeholder="e.g., Hospital Readmission Variance — Q4 2025" required>
+    </label>
+
+    <label>Audience
+      <input type="text" id="audience" name="audience" value="Executive Leadership Team">
+    </label>
+
+    <label>What should the briefing cover?
+      <textarea id="instruction" name="instruction" rows="5" placeholder="Brief the ELT on the November readmission spike. The root cause appears to be the pharmacist callback workflow being deprecated during the EHR upgrade. Recommend restoring the workflow plus 2 new pharmacist FTEs." required></textarea>
+    </label>
+
+    <label>Source documents (optional, but helpful)
+      <input type="file" id="files" name="files" multiple>
+      <span class="muted">PDFs, markdown, txt, Word — anything text-extractable. Uploaded to a per-draft UC volume folder.</span>
+    </label>
+
+    <div class="draft-form-actions">
+      <button type="button" class="primary" id="generate-btn">Create draft and generate</button>
+    </div>
+  </form>
+
+  <div id="status"></div>
+</div>
+
+<script>
+  const statusEl = document.getElementById("status");
+  document.getElementById("generate-btn").addEventListener("click", async () => {
+    const title = document.getElementById("title").value.trim();
+    const audience = document.getElementById("audience").value.trim();
+    const instruction = document.getElementById("instruction").value.trim();
+    if (!title || !instruction) {
+      statusEl.innerHTML = '<div class="error-banner">Please fill in title and instruction.</div>';
+      return;
+    }
+    statusEl.innerHTML = '<div class="info-banner">Creating draft...</div>';
+
+    const r = await fetch("/api/drafts", {
+      method: "POST",
+      headers: {"content-type": "application/json"},
+      body: JSON.stringify({title, audience, instruction}),
+    });
+    const {draft_id} = await r.json();
+
+    // Upload files
+    const files = document.getElementById("files").files;
+    if (files.length) {
+      statusEl.innerHTML = `<div class="info-banner">Uploading ${files.length} source document(s)...</div>`;
+      for (const file of files) {
+        const fd = new FormData();
+        fd.append("file", file);
+        await fetch(`/api/drafts/${draft_id}/upload`, {method: "POST", body: fd});
+      }
+    }
+
+    statusEl.innerHTML = '<div class="info-banner">Kicking off generation...</div>';
+    await fetch(`/api/drafts/${draft_id}/generate`, {
+      method: "POST",
+      headers: {"content-type": "application/json"},
+      body: JSON.stringify({regenerate: false}),
+    });
+
+    window.location.href = `/author/drafts/${draft_id}`;
+  });
+</script>
+{% endblock %}

@@ -13,6 +13,10 @@ env:
     value: "/Volumes/kk_test/sbar_briefing/sbar_documents"
   - name: SUPP_VOLUME_PATH
     value: "/Volumes/kk_test/sbar_briefing/supplemental_docs"
+  - name: DRAFT_INPUTS_VOLUME_PATH
+    value: "/Volumes/kk_test/sbar_briefing/draft_inputs"
+  - name: LLM_MODEL_NAME
+    value: "databricks-claude-sonnet-4-6"
   - name: LAKEBASE_INSTANCE
     value: "hls-lakebase-demo"
   - name: LAKEBASE_PG_DATABASE

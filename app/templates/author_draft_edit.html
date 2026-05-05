@@ -1,0 +1,158 @@
+{% extends "_layout.html" %}
+{% block title %}Editing: {{ draft.title }}{% endblock %}
+{% block content %}
+<div class="draft-edit">
+  <div class="draft-header">
+    <div>
+      <h1 id="draft-title">{{ draft.title }}</h1>
+      <p class="muted">Audience: <span id="draft-audience">{{ draft.audience }}</span> &middot; Status: <span id="draft-status" class="status-{{ draft.status }}">{{ draft.status }}</span></p>
+    </div>
+    <div class="draft-actions">
+      <button type="button" id="regenerate-btn">Regenerate</button>
+      <button type="button" class="primary" id="publish-btn">Publish</button>
+    </div>
+  </div>
+
+  <details class="draft-meta">
+    <summary>Original instruction and source documents</summary>
+    <div><strong>Instruction:</strong></div>
+    <div class="instruction-block">{{ draft.instruction }}</div>
+    <div><strong>Source documents:</strong></div>
+    <ul>
+      {% for s in draft.source_files %}<li>{{ s.filename }}</li>{% else %}<li class="muted">none</li>{% endfor %}
+    </ul>
+    {% if draft.corpus_searches %}
+    <div><strong>What the agent looked up in the corpus:</strong></div>
+    <ul class="corpus-searches">
+      {% for cs in draft.corpus_searches %}
+        <li><strong>{{ cs.query }}</strong>{% if cs.sources %} <span class="muted">— sources: {{ cs.sources | join(", ") }}</span>{% endif %}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </details>
+
+  <div class="draft-editor-area">
+    <div id="generation-status" class="info-banner" style="display:none;"></div>
+    <textarea id="draft-md" class="draft-md-editor" rows="32" placeholder="The draft will appear here once generation completes...">{{ draft.current_md or "" }}</textarea>
+  </div>
+
+  <div class="draft-preview-area">
+    <h2>Preview</h2>
+    <article id="draft-preview" class="sbar-content"></article>
+  </div>
+
+  <div id="action-status"></div>
+</div>
+
+<script>
+  const DRAFT_ID = "{{ draft.draft_id }}";
+  let initialStatus = "{{ draft.status }}";
+
+  const mdEl = document.getElementById("draft-md");
+  const previewEl = document.getElementById("draft-preview");
+  const statusBadge = document.getElementById("draft-status");
+  const genStatus = document.getElementById("generation-status");
+  const actionStatus = document.getElementById("action-status");
+
+  function renderPreview() {
+    // Minimal client-side md -> html. For production polish you'd swap in marked.js.
+    const md = mdEl.value || "";
+    let html = md
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/^# (.+)$/gm, "<h1>$1</h1>")
+      .replace(/^## (.+)$/gm, "<h2>$1</h2>")
+      .replace(/^### (.+)$/gm, "<h3>$1</h3>")
+      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/^\d+\. (.+)$/gm, "<li>$1</li>")
+      .replace(/^- (.+)$/gm, "<li>$1</li>")
+      .replace(/(<li>.*?<\/li>(\n<li>.*?<\/li>)*)/g, "<ul>$1</ul>")
+      .replace(/\n\n/g, "<br><br>");
+    previewEl.innerHTML = html;
+  }
+  renderPreview();
+  mdEl.addEventListener("input", () => { renderPreview(); scheduleSave(); });
+
+  let saveTimer = null;
+  function scheduleSave() {
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(saveEdits, 1500);
+  }
+  async function saveEdits() {
+    const r = await fetch(`/api/drafts/${DRAFT_ID}`, {
+      method: "PATCH",
+      headers: {"content-type": "application/json"},
+      body: JSON.stringify({current_md: mdEl.value}),
+    });
+    if (r.ok) {
+      actionStatus.innerHTML = '<span class="muted">Saved.</span>';
+      setTimeout(() => { actionStatus.innerHTML = ""; }, 2000);
+    }
+  }
+
+  async function pollStatus() {
+    while (true) {
+      const r = await fetch(`/api/drafts/${DRAFT_ID}`);
+      const d = await r.json();
+      statusBadge.className = `status-${d.status}`;
+      statusBadge.textContent = d.status;
+
+      if (d.status === "draft" && d.current_md) {
+        // Generation is done. Update editor only if user hasn't typed since.
+        if (mdEl.value !== d.current_md && !mdEl.dataset.userEdited) {
+          mdEl.value = d.current_md;
+          renderPreview();
+        }
+        genStatus.style.display = "none";
+        return;
+      } else if (d.status === "generation_failed") {
+        genStatus.style.display = "block";
+        genStatus.className = "error-banner";
+        genStatus.textContent = `Generation failed: ${d.error_message || "unknown error"}`;
+        return;
+      } else if (d.status === "generating") {
+        genStatus.style.display = "block";
+        genStatus.className = "info-banner";
+        genStatus.textContent = "Generating draft (the agent may consult the corpus while it works)...";
+      }
+      await new Promise(res => setTimeout(res, 2000));
+    }
+  }
+
+  // Track that the user has typed so we don't overwrite their input
+  mdEl.addEventListener("input", () => { mdEl.dataset.userEdited = "1"; });
+
+  if (initialStatus === "generating") {
+    pollStatus();
+  }
+
+  document.getElementById("regenerate-btn").addEventListener("click", async () => {
+    if (!confirm("Regenerate the draft? Your edits will be passed to the agent as context so they're preserved where possible.")) return;
+    // Save current edits first so the regenerate has them.
+    await saveEdits();
+    mdEl.dataset.userEdited = "";
+    const r = await fetch(`/api/drafts/${DRAFT_ID}/generate`, {
+      method: "POST",
+      headers: {"content-type": "application/json"},
+      body: JSON.stringify({regenerate: true}),
+    });
+    if (r.ok) {
+      genStatus.style.display = "block";
+      genStatus.className = "info-banner";
+      genStatus.textContent = "Regenerating...";
+      pollStatus();
+    }
+  });
+
+  document.getElementById("publish-btn").addEventListener("click", async () => {
+    if (!confirm("Publish this SBAR? Executives will be able to see and ask questions about it immediately.")) return;
+    await saveEdits();
+    const r = await fetch(`/api/drafts/${DRAFT_ID}/publish`, {method: "POST"});
+    const data = await r.json();
+    if (r.ok) {
+      actionStatus.innerHTML = `<div class="info-banner">Published. <a href="${data.url}">View as executive →</a></div>`;
+    } else {
+      actionStatus.innerHTML = `<div class="error-banner">${data.detail || "publish failed"}</div>`;
+    }
+  });
+</script>
+{% endblock %}

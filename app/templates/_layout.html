@@ -17,6 +17,7 @@
     <span class="role-pill">{{ user.role_label }}</span>
     <span class="user-email">{{ user.email }}</span>
     {% if user.is_author %}<a href="/author" class="nav-link">Author View</a>{% endif %}
+    {% if user.is_author %}<a href="/author/drafts/new" class="nav-link">New Draft</a>{% endif %}
     <a href="/" class="nav-link">Executive View</a>
   </div>
 </header>
