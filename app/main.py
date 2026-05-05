@@ -70,17 +70,22 @@ def _user(request: Request) -> CurrentUser:
 
 
 def _list_sbars() -> list[dict]:
-    """List markdown SBARs in the UC volume via the Files API."""
+    """List markdown SBARs in the UC volume via the Files API.
+    Title is the first H1 heading found, falling back to the filename."""
     out = []
     try:
         for entry in _workspace_client.files.list_directory_contents(SBAR_VOLUME_PATH):
             if entry.is_directory or not (entry.name or "").endswith(".md"):
                 continue
             content = _read_sbar_path(entry.path)
-            first_line = content.splitlines()[0].strip().lstrip("# ").strip() if content else entry.name
+            title = entry.name[:-3]
+            for line in (content or "").splitlines():
+                if line.startswith("# ") and not line.startswith("## "):
+                    title = line[2:].strip()
+                    break
             out.append({
                 "id": entry.name[:-3],
-                "title": first_line,
+                "title": title,
                 "modified": datetime.fromtimestamp((entry.last_modified or 0) / 1000, tz=timezone.utc).isoformat() if entry.last_modified else "",
             })
     except Exception:
@@ -506,6 +511,41 @@ async def publish_draft(request: Request, draft_id: str):
         payload={"draft_id": draft_id, "sbar_id": sbar_id},
     )
     return {"sbar_id": sbar_id, "url": f"/sbar/{sbar_id}"}
+
+
+@app.get("/api/source/{filename}", response_class=HTMLResponse)
+def view_source(filename: str):
+    """Serve a supplemental document so executives can click through citations.
+    Reads from the supplemental_docs volume via the App SP. PDFs return as-is;
+    markdown is rendered to HTML."""
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "", filename)
+    if not safe or safe != filename:
+        raise HTTPException(status_code=400, detail="invalid filename")
+
+    supp_path = os.getenv("SUPP_VOLUME_PATH", "/Volumes/kk_test/sbar_briefing/supplemental_docs")
+    full_path = f"{supp_path}/{safe}"
+    try:
+        resp = _workspace_client.files.download(full_path)
+        raw = resp.contents.read()
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"source not found: {filename}")
+
+    if filename.lower().endswith(".pdf"):
+        from fastapi.responses import Response
+        return Response(content=raw, media_type="application/pdf",
+                        headers={"Content-Disposition": f'inline; filename="{safe}"'})
+
+    text = raw.decode("utf-8", errors="replace")
+    html = markdown.markdown(text, extensions=["tables", "fenced_code"])
+    return HTMLResponse(f"""<!doctype html><html><head><meta charset='utf-8'>
+<title>{safe}</title>
+<link rel='stylesheet' href='/static/styles.css'>
+<style>body{{padding:24px;max-width:900px;margin:0 auto;background:#fff;}}
+.source-header{{padding-bottom:12px;margin-bottom:16px;border-bottom:1px solid var(--border);color:var(--muted);font-size:13px;}}
+</style></head><body>
+<div class='source-header'>Source document: <strong>{safe}</strong></div>
+<div class='sbar-content'>{html}</div>
+</body></html>""")
 
 
 @app.get("/healthz")

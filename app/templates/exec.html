@@ -72,8 +72,11 @@
 
   function renderSources(sources) {
     if (!sources || !sources.length) return "";
-    const items = sources.map(s => `<li>${escapeHtml(s.filename)}</li>`).join("");
-    return `<details class="sources"><summary>Sources (${sources.length})</summary><ul>${items}</ul></details>`;
+    const items = sources.map(s => {
+      const f = escapeHtml(s.filename);
+      return `<li><a href="/api/source/${encodeURIComponent(s.filename)}" target="_blank" rel="noopener">${f}</a></li>`;
+    }).join("");
+    return `<details class="sources"><summary>Sources (${sources.length}) - click to open</summary><ul>${items}</ul></details>`;
   }
 
   function escapeHtml(s) {
