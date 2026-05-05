@@ -28,6 +28,7 @@ from lib.db import insert_event, query
 from lib.ka import ask as ka_ask
 from lib import drafts as drafts_lib
 from lib.llm import generate_draft
+from lib.notify import notify_published
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -339,10 +340,28 @@ def _slugify(text: str) -> str:
 
 
 def _read_volume_text(volume_path: str, max_bytes: int = 200_000) -> str:
-    """Read a UC volume file as text. Truncates at max_bytes to keep prompt
+    """Read a UC volume file as text. PDFs are extracted with pypdf; everything
+    else is decoded as UTF-8. Truncates output at max_bytes to keep prompt
     sizes reasonable. Returns an empty string on any read failure."""
     try:
         resp = _workspace_client.files.download(volume_path)
+        # PDFs need text extraction. Detect by extension to avoid sniffing magic bytes.
+        if volume_path.lower().endswith(".pdf"):
+            from io import BytesIO
+            from pypdf import PdfReader
+            reader = PdfReader(BytesIO(resp.contents.read()))
+            pages = []
+            for page in reader.pages:
+                try:
+                    text = page.extract_text() or ""
+                    pages.append(text)
+                except Exception:
+                    continue
+            text = "\n\n".join(pages).strip()
+            if len(text) > max_bytes:
+                return text[:max_bytes] + "\n\n[truncated]"
+            return text
+        # Markdown, txt, csv, etc.
         raw = resp.contents.read(max_bytes + 1)
         if len(raw) > max_bytes:
             return raw[:max_bytes].decode("utf-8", errors="replace") + "\n\n[truncated]"
@@ -556,6 +575,22 @@ async def publish_draft(request: Request, draft_id: str):
         session_id=draft_id, sbar_id=sbar_id, event_type="draft_published",
         payload={"draft_id": draft_id, "sbar_id": sbar_id},
     )
+
+    # Fire the notification (Slack webhook if configured, otherwise log-only).
+    # Delivered or not, we record the attempt so the author dashboard can
+    # show that publish triggered a broadcast.
+    sbar_title = next((s["title"] for s in _list_sbars() if s["id"] == sbar_id), draft.get("title") or sbar_id)
+    app_url = str(request.base_url).rstrip("/")
+    notify_audit = notify_published(
+        title=sbar_title, author_email=user.email,
+        sbar_id=sbar_id, app_url=app_url,
+    )
+    insert_event(
+        user_email=user.email, user_role=user.role_label,
+        session_id=draft_id, sbar_id=sbar_id, event_type="notification_sent",
+        payload=notify_audit,
+    )
+
     return {"sbar_id": sbar_id, "url": f"/sbar/{sbar_id}"}
 
 

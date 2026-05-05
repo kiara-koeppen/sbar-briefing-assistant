@@ -6,3 +6,4 @@ databricks-sdk==0.40.0
 markdown==3.7
 python-multipart==0.0.20
 httpx==0.28.1
+pypdf==5.1.0

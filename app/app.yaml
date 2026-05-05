@@ -17,6 +17,10 @@ env:
     value: "/Volumes/kk_test/sbar_briefing/draft_inputs"
   - name: LLM_MODEL_NAME
     value: "databricks-claude-sonnet-4-6"
+  - name: NOTIFICATION_SLACK_WEBHOOK_URL
+    value: ""
+  - name: NOTIFICATION_EXEC_LIST
+    value: "ceo@regionalhealth.example.com,cfo@regionalhealth.example.com,coo@regionalhealth.example.com,cmo@regionalhealth.example.com,cno@regionalhealth.example.com,board.chair@regionalhealth.example.com"
   - name: LAKEBASE_INSTANCE
     value: "hls-lakebase-demo"
   - name: LAKEBASE_PG_DATABASE

@@ -304,7 +304,6 @@ what's built, what's partial, and what would need to be added.
 | Gap | What works today | What's needed for production |
 |---|---|---|
 | **Source doc access control** | Every executive can see every supplemental doc | Use the executive's OBO token (not the SP's) when serving `/api/source/*` so UC volume permissions apply per-user |
-| **PDF source ingestion in drafting** | Markdown, txt, .md sources work | Add PDF text extraction (e.g. `pypdf` or Unstructured) so author uploads can be PDFs |
 | **Author UI polish** | Functional textarea editor with auto-save | Rich editor with section anchors (one S/B/A/R section per panel), inline diff after regenerate |
 | **Generation error handling** | Failures land in `generation_failed` status with the error message | Retry with backoff, partial draft recovery, model fallback |
 | **Mobile** | Layout works at desktop sizes | Responsive layout for phones (executives often read briefings on mobile) |
@@ -314,7 +313,6 @@ what's built, what's partial, and what would need to be added.
 
 | Thing | What it is | When you'd add it |
 |---|---|---|
-| **Notifications** | Email or Slack alert when a new SBAR is published | Whenever execs aren't already in the habit of opening the app |
 | **Versioning** | If Nina edits a published SBAR, keep history | If briefings get amended after publish |
 | **Search/filter** | Across the SBAR list | Once the corpus passes ~20-30 SBARs |
 | **Identity outside Databricks** | Today the app uses Databricks workspace identity | If executives aren't workspace users; integrate Microsoft Entra or whatever IdP is in place |
@@ -325,19 +323,31 @@ what's built, what's partial, and what would need to be added.
 
 ### Suggested first-week production hardening (if customer wants to ship)
 
-1. Wire the App's `/api/source/*` endpoint to use the executive's OBO token
-   for volume reads rather than the SP. About 30 min of code change.
-2. Add PDF text extraction in `lib/llm.py` so authors can upload PDFs to
-   draft from. ~1 hour with `pypdf`.
-3. Build a simple notification job: when a new file lands in `sbar_documents`,
-   send an email or Slack message to the author_emails list. ~2 hours.
-4. Set a Lakebase audit retention policy (e.g. partition by month, archive
-   monthly via a job). ~2 hours.
-5. Decide PHI/compliance posture and document it. Time depends on the
-   customer's data classification.
+✅ **Done in this build:**
+- **PDF source ingestion.** `pypdf` extracts text from PDF uploads in
+  `lib/llm.py` so authors can drag in any source format the org already has.
+- **Publish notifications.** `lib/notify.py` sends a Slack-formatted webhook
+  on publish (set `NOTIFICATION_SLACK_WEBHOOK_URL` in `app.yaml` to wire it
+  to a real Slack/Teams channel). Falls back to log-only if unconfigured.
+  Each notification attempt is recorded as a `notification_sent` event in
+  the audit table, so the author can see in the dashboard that publish
+  triggered the broadcast.
 
-That's roughly a one- to two-day hardening sprint to get from "live demo" to
-"defensible production rollout for a single team of executives."
+🔧 **Still to do for a real rollout:**
+
+1. Wire `/api/source/*` to use the executive's OBO token rather than the
+   SP for volume reads. ~30 min of code change. Until this lands, every
+   exec sees every supplemental doc regardless of UC permissions.
+2. Set a Lakebase audit retention policy (partition by month, archive
+   monthly via a job). ~2 hours.
+3. Decide PHI/compliance posture with the customer's compliance team. Output
+   is a one-pager: what data classes are allowed in volumes, what redaction
+   happens at draft time, who approves before publish, audit retention.
+   Time depends on the customer's existing data classification policy.
+
+That's roughly a half-day of code plus a compliance conversation to get
+from "live demo" to "defensible production rollout for a single team of
+executives."
 
 ## Key design choices
 
