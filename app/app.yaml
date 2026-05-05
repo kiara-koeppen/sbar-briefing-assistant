@@ -1,0 +1,23 @@
+command:
+  - "uvicorn"
+  - "main:app"
+  - "--host"
+  - "0.0.0.0"
+  - "--port"
+  - "8000"
+
+env:
+  - name: KA_ENDPOINT_NAME
+    value: "ka-3306ffae-endpoint"
+  - name: SBAR_VOLUME_PATH
+    value: "/Volumes/kk_test/sbar_briefing/sbar_documents"
+  - name: SUPP_VOLUME_PATH
+    value: "/Volumes/kk_test/sbar_briefing/supplemental_docs"
+  - name: LAKEBASE_INSTANCE
+    value: "hls-lakebase-demo"
+  - name: LAKEBASE_PG_DATABASE
+    value: "sbar_briefing"
+  - name: LAKEBASE_PG_SCHEMA
+    value: "sbar"
+  - name: AUTHOR_USER_EMAILS
+    value: "kiara.koeppen@databricks.com"

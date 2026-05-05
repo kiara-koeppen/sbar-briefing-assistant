@@ -1,0 +1,145 @@
+{% extends "_layout.html" %}
+{% block title %}{{ sbar_title }} - SBAR Briefing{% endblock %}
+{% block content %}
+<div class="layout-split">
+  <section class="sbar-panel">
+    <div class="sbar-toolbar">
+      <details class="sbar-picker">
+        <summary>{{ sbar_title }}</summary>
+        <ul>
+          {% for s in all_sbars %}
+            <li><a href="/sbar/{{ s.id }}" {% if s.id == sbar_id %}class="active"{% endif %}>{{ s.title }}</a></li>
+          {% endfor %}
+        </ul>
+      </details>
+    </div>
+    <article class="sbar-content">{{ sbar_html|safe }}</article>
+  </section>
+
+  <section class="chat-panel">
+    <div class="chat-header">
+      <h2>Ask a question</h2>
+      <p class="muted">Grounded in board memos, KPI reports, prior SBARs, and policy docs.</p>
+    </div>
+    <div class="chat-messages" id="chat-messages"></div>
+    <form class="chat-form" id="chat-form">
+      <textarea id="question" name="question" placeholder="e.g., What's driving the readmission variance vs Q3?" rows="2"></textarea>
+      <button type="submit">Ask</button>
+    </form>
+    <div class="chat-suggestions">
+      <span class="muted">Try:</span>
+      <button type="button" class="suggestion">What's driving the readmission variance vs Q3?</button>
+      <button type="button" class="suggestion">Have we tried this intervention before?</button>
+      <button type="button" class="suggestion">What did the Joint Commission say about our discharge protocol in 2023?</button>
+    </div>
+  </section>
+</div>
+
+<script>
+  const SBAR_ID = "{{ sbar_id }}";
+  const SESSION_ID = "{{ session_id }}";
+  const VIEW_START = Date.now();
+  let viewLogged = false;
+
+  function logView() {
+    if (viewLogged) return;
+    viewLogged = true;
+    fetch("/api/view", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sbar_id: SBAR_ID, session_id: SESSION_ID, duration_seconds: Math.round((Date.now() - VIEW_START) / 1000) }),
+    });
+  }
+  setTimeout(logView, 4000);
+  window.addEventListener("beforeunload", logView);
+
+  const messagesEl = document.getElementById("chat-messages");
+  const formEl = document.getElementById("chat-form");
+  const questionEl = document.getElementById("question");
+
+  document.querySelectorAll(".suggestion").forEach((b) => {
+    b.addEventListener("click", () => { questionEl.value = b.textContent; questionEl.focus(); });
+  });
+
+  function bubble(role, text, opts = {}) {
+    const el = document.createElement("div");
+    el.className = `bubble bubble-${role}` + (opts.lowConf ? " bubble-low-conf" : "");
+    el.innerHTML = text;
+    messagesEl.appendChild(el);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    return el;
+  }
+
+  function renderSources(sources) {
+    if (!sources || !sources.length) return "";
+    const items = sources.map(s => `<li>${escapeHtml(s.filename)}</li>`).join("");
+    return `<details class="sources"><summary>Sources (${sources.length})</summary><ul>${items}</ul></details>`;
+  }
+
+  function escapeHtml(s) {
+    const div = document.createElement("div"); div.textContent = s ?? ""; return div.innerHTML;
+  }
+
+  function feedbackButtons(questionId) {
+    return `<div class="feedback">
+      <button data-rating="up"   data-qid="${questionId}">👍 Helpful</button>
+      <button data-rating="down" data-qid="${questionId}">👎 Not helpful</button>
+    </div>`;
+  }
+
+  messagesEl.addEventListener("click", (e) => {
+    const btn = e.target.closest(".feedback button");
+    if (!btn) return;
+    fetch("/api/feedback", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sbar_id: SBAR_ID, session_id: SESSION_ID, question_id: btn.dataset.qid, rating: btn.dataset.rating }),
+    }).then(() => {
+      btn.parentElement.innerHTML = `<span class="muted">Thanks for the feedback.</span>`;
+    });
+  });
+
+  async function pollAnswer(questionId) {
+    while (true) {
+      const r = await fetch(`/api/answer/${questionId}`);
+      if (!r.ok) return { status: "error", error: "lost answer" };
+      const state = await r.json();
+      if (state.status !== "running") return state;
+      await new Promise((res) => setTimeout(res, 1500));
+    }
+  }
+
+  formEl.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const q = questionEl.value.trim();
+    if (!q) return;
+    questionEl.value = "";
+    bubble("user", escapeHtml(q));
+    const thinking = bubble("assistant", "<em>Searching the corpus…</em>");
+
+    const r = await fetch("/api/ask", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sbar_id: SBAR_ID, session_id: SESSION_ID, question: q }),
+    });
+    const { question_id } = await r.json();
+    const state = await pollAnswer(question_id);
+    thinking.remove();
+
+    if (state.status === "error") {
+      bubble("assistant", `<strong>Error:</strong> ${escapeHtml(state.error)}`);
+      return;
+    }
+    const result = state.result;
+    const html = escapeHtml(result.answer).replace(/\n/g, "<br>");
+    bubble(
+      "assistant",
+      (result.low_confidence ? `<div class="lowconf-badge">Low confidence — knowledge gap</div>` : "")
+      + html
+      + renderSources(result.sources)
+      + feedbackButtons(question_id),
+      { lowConf: result.low_confidence }
+    );
+  });
+</script>
+{% endblock %}

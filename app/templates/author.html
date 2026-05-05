@@ -1,0 +1,62 @@
+{% extends "_layout.html" %}
+{% block title %}Author View - {{ sbar_title }}{% endblock %}
+{% block content %}
+<div class="author-view">
+  <div class="author-header">
+    <h1>Author View</h1>
+    <details class="sbar-picker">
+      <summary>{{ sbar_title }}</summary>
+      <ul>
+        {% for s in all_sbars %}
+          <li><a href="/author?sbar_id={{ s.id }}" {% if s.id == sbar_id %}class="active"{% endif %}>{{ s.title }}</a></li>
+        {% endfor %}
+      </ul>
+    </details>
+  </div>
+
+  <div class="kpi-row">
+    <div class="kpi"><span class="kpi-num">{{ summary.viewers }}</span><span class="kpi-label">Executives viewed</span></div>
+    <div class="kpi"><span class="kpi-num">{{ summary.askers }}</span><span class="kpi-label">Asked questions</span></div>
+    <div class="kpi"><span class="kpi-num">{{ summary.questions }}</span><span class="kpi-label">Questions total</span></div>
+    <div class="kpi {% if summary.unanswered %}kpi-warn{% endif %}"><span class="kpi-num">{{ summary.unanswered }}</span><span class="kpi-label">Knowledge gaps</span></div>
+  </div>
+
+  <section>
+    <h2>Engagement by executive</h2>
+    <table class="data-table">
+      <thead><tr><th>Role</th><th>Email</th><th>Views</th><th>Questions</th><th>Last activity</th></tr></thead>
+      <tbody>
+        {% for r in engagement %}
+        <tr>
+          <td>{{ r.user_role }}</td>
+          <td class="muted">{{ r.user_email }}</td>
+          <td>{{ r.views }}</td>
+          <td>{{ r.questions }}</td>
+          <td class="muted">{{ r.last_event.strftime("%Y-%m-%d %H:%M UTC") if r.last_event else "—" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Questions asked</h2>
+    <table class="data-table">
+      <thead><tr><th>Role</th><th>Question</th><th>Confidence</th><th>Feedback</th><th>When</th></tr></thead>
+      <tbody>
+        {% for q in questions %}
+        <tr class="{% if q.low_confidence %}row-warn{% endif %}">
+          <td>{{ q.user_role }}</td>
+          <td>{{ q.question }}</td>
+          <td>{% if q.low_confidence %}<span class="lowconf-badge">Low</span>{% else %}<span class="okconf-badge">OK</span>{% endif %}</td>
+          <td>
+            {% if q.feedback == 'up' %}👍{% elif q.feedback == 'down' %}👎{% else %}<span class="muted">—</span>{% endif %}
+          </td>
+          <td class="muted">{{ q.ts.strftime("%Y-%m-%d %H:%M UTC") if q.ts else "—" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+</div>
+{% endblock %}
