@@ -3,19 +3,16 @@
 {% block content %}
 <div class="draft-new">
   <h1>Draft a new SBAR</h1>
-  <p class="muted">Provide a brief instruction, upload any source documents, and the assistant will produce a draft you can edit and publish.</p>
+  <p class="muted">Tell the assistant what this SBAR is about, upload any source documents, and it will produce a draft you can edit and publish.</p>
 
   <form id="draft-form" class="draft-form" onsubmit="return false;">
     <label>Title
       <input type="text" id="title" name="title" placeholder="e.g., Hospital Readmission Variance — Q4 2025" required>
     </label>
 
-    <label>Audience
-      <input type="text" id="audience" name="audience" value="Executive Leadership Team">
-    </label>
-
-    <label>What should the briefing cover?
-      <textarea id="instruction" name="instruction" rows="5" placeholder="Brief the ELT on the November readmission spike. The root cause appears to be the pharmacist callback workflow being deprecated during the EHR upgrade. Recommend restoring the workflow plus 2 new pharmacist FTEs." required></textarea>
+    <label>What's this SBAR about?
+      <textarea id="instruction" name="instruction" rows="6" placeholder="Brief the ELT on the November readmission spike. The root cause appears to be the pharmacist callback workflow being deprecated during the EHR upgrade. Recommend restoring the workflow plus 2 new pharmacist FTEs." required></textarea>
+      <span class="muted">Describe what's happening and what you want the assistant to recommend. The agent will pull supporting context from the supplemental docs corpus on its own.</span>
     </label>
 
     <label>Source documents (optional, but helpful)
@@ -35,10 +32,9 @@
   const statusEl = document.getElementById("status");
   document.getElementById("generate-btn").addEventListener("click", async () => {
     const title = document.getElementById("title").value.trim();
-    const audience = document.getElementById("audience").value.trim();
     const instruction = document.getElementById("instruction").value.trim();
     if (!title || !instruction) {
-      statusEl.innerHTML = '<div class="error-banner">Please fill in title and instruction.</div>';
+      statusEl.innerHTML = '<div class="error-banner">Please fill in the title and the SBAR description.</div>';
       return;
     }
     statusEl.innerHTML = '<div class="info-banner">Creating draft...</div>';
@@ -46,7 +42,7 @@
     const r = await fetch("/api/drafts", {
       method: "POST",
       headers: {"content-type": "application/json"},
-      body: JSON.stringify({title, audience, instruction}),
+      body: JSON.stringify({title, audience: "Executive Leadership Team", instruction}),
     });
     const {draft_id} = await r.json();
 
