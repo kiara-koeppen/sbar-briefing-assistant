@@ -1,20 +1,17 @@
 # Executive SBAR Briefing Assistant
 
-A Databricks-native demo that replaces recurring executive SBAR (Situation,
-Background, Assessment, Recommendation) briefing meetings with a self-service
-Knowledge Assistant App, complete with full audit telemetry and a closed-loop
-improvement view for the SBAR author.
-
-**Live demo URL:** https://sbar-briefing-assistant-669602668219382.2.azure.databricksapps.com
+A Databricks-native reference implementation that replaces recurring executive
+SBAR (Situation, Background, Assessment, Recommendation) briefing meetings with
+a self-service Knowledge Assistant App. Includes full audit telemetry and a
+closed-loop improvement view for the SBAR author.
 
 ---
 
 > ## Disclaimer
 >
 > This project is **not an official Databricks product**. It is an unofficial
-> demo built by a Databricks employee for educational and customer-walkthrough
-> purposes. It is provided **as-is**, with no warranties, no SLA, and no
-> implied or expressed support commitment from Databricks.
+> reference implementation provided **as-is**, with no warranties, no SLA, and
+> no implied or expressed support commitment from Databricks.
 >
 > All sample data in this repository (SBAR contents, supplemental documents,
 > KPI numbers, executive personas, contract terms, the "Regional Health System"
@@ -23,11 +20,11 @@ improvement view for the SBAR author.
 > coincidental.
 >
 > The code, architecture patterns, and design decisions here are shared
-> openly for reference, but customers and partners adopting any of this for
-> their own use are responsible for their own security, compliance, privacy,
-> and operational reviews. In particular, anyone considering this for use
-> with Protected Health Information (PHI) or other regulated data should
-> conduct an independent compliance assessment before production rollout.
+> openly for reference. Anyone adopting any of this for their own use is
+> responsible for their own security, compliance, privacy, and operational
+> reviews. In particular, anyone considering this for use with Protected
+> Health Information (PHI) or other regulated data should conduct an
+> independent compliance assessment before production rollout.
 
 ---
 
@@ -36,8 +33,8 @@ improvement view for the SBAR author.
 Senior healthcare executives spend hours every two weeks walking peers through
 SBAR briefings. Same questions recur, executives can't explore the underlying
 evidence between meetings, and there's no audit trail of what concerns
-surfaced. This demo collapses that workflow into a self-service experience
-with full visibility for the author.
+surfaced. This implementation collapses that workflow into a self-service
+experience with full visibility for the author.
 
 The whole stack runs on Databricks: Agent Bricks Knowledge Assistant +
 Databricks App + Lakebase Postgres + Unity Catalog volumes + a Lakeflow Job
@@ -48,12 +45,13 @@ keeping the KA index fresh.
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                                                                     │
-│  Nina, VP of Operations — the SBAR author                           │
+│  The author (e.g. VP of Operations)                                 │
 │                                                                     │
 │   1. Opens /author/drafts/new                                       │
 │   2. Writes a one-paragraph instruction:                            │
 │      "Brief the ELT on the readmission spike. Recommend X."         │
-│   3. Optionally uploads source PDFs                                 │
+│   3. Uploads source PDFs (required for any topic the existing       │
+│      corpus does not already cover; optional otherwise)             │
 │   4. Clicks Generate                                                │
 │                                                                     │
 │         ▼  agent calls KA, drafts SBAR with cited figures           │
@@ -86,7 +84,7 @@ keeping the KA index fresh.
                               ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │                                                                     │
-│  Nina back at /author — the closed loop                             │
+│  Author back at /author — the closed loop                           │
 │                                                                     │
 │   1. Opens dashboard                                                │
 │   2. Sees engagement (who viewed, who asked questions)              │
@@ -101,38 +99,38 @@ keeping the KA index fresh.
 ```
 
 ### One-line summary
-Nina drafts an SBAR with an AI assistant that pulls from her organization's
-own corpus, executives self-serve through it without a meeting, and Nina sees
-exactly what they engaged with and where the AI fell short, so she can close
-the gaps before the next briefing cycle.
+The author drafts an SBAR with an AI assistant that pulls from the
+organization's own corpus, executives self-serve through it without a meeting,
+and the author sees exactly what they engaged with and where the AI fell
+short, so the gaps can be closed before the next briefing cycle.
 
 ## Architecture
 
 ```
                                     ┌──────────────────────────┐
-                                    │  Unity Catalog (Volumes) │
-   ┌─────────────────────┐          │  • sbar_documents        │
-   │  SBAR Author (Nina) │ ────────►│  • supplemental_docs     │
-   └─────────────────────┘          └────────────┬─────────────┘
+                                    │  Unity Catalog Volumes   │
+   ┌─────────────────────┐          │  • SBAR documents        │
+   │  Author             │ ────────►│  • Supplemental docs     │
+   └─────────────────────┘          │  • Draft inputs          │
+                                    └────────────┬─────────────┘
                                                  │ grounds
                                                  ▼
                           ┌────────────────────────────────────┐
                           │  Knowledge Assistant (Agent Bricks)│◄────────┐
-                          │  ka-3306ffae-endpoint              │         │
+                          │  RAG over the supplemental corpus  │         │
                           └────────────────┬───────────────────┘         │
                                            │ Q&A + citations              │
                                            ▼                              │
    ┌─────────────────────┐         ┌──────────────────────────┐          │
-   │  Executives (C-suite)│ ──────►│  Databricks App          │          │
+   │  Executives         │ ──────► │  Databricks App          │          │
    └─────────────────────┘         │  FastAPI + Jinja, OBO    │          │
-                                   │  Async KA polling        │          │
+                                   │  Async LLM polling       │          │
                                    └──────────┬───────────────┘          │
                                               │ audit writes              │
                                               ▼                          │
                                    ┌──────────────────────────┐          │
                                    │  Lakebase (Postgres)     │          │
-                                   │  sbar_briefing.audit     │          │
-                                   │  _events                 │          │
+                                   │  audit_events + drafts   │          │
                                    └──────────┬───────────────┘          │
                                               │                          │
                                               ▼                          │
@@ -146,128 +144,112 @@ the gaps before the next briefing cycle.
    └───────────────────────────────────────────────────────────────────┘
 ```
 
-### Components actually built
+### Components the bundle deploys
 
-| Layer | Component | Resource ID |
+| Layer | Component | What it does |
 |---|---|---|
-| AI | Agent Bricks Knowledge Assistant | `ka-3306ffae-endpoint` |
-| App | Databricks App | `sbar-briefing-assistant` |
-| Audit | Lakebase database | `hls-lakebase-demo` (database `sbar_briefing`, schema `sbar`) |
-| Storage | UC Volume (SBARs) | `kk_test.sbar_briefing.sbar_documents` |
-| Storage | UC Volume (corpus) | `kk_test.sbar_briefing.supplemental_docs` |
-| Orchestration | Lakeflow Job (nightly KA refresh) | job_id `966268820122048` |
-
-### Components NOT built (intentional)
-
-- **SDP pipeline (Bronze/Silver/Gold for interaction logs).** The dbdemos
-  generator spec called for this, but for a demo with single-digit executives
-  and dozens of questions per cycle, an SDP medallion adds no analytical
-  value over reading Lakebase directly. The in-app Author View IS the
-  analytics layer. SDP would matter at production scale (thousands of
-  interactions/day) — not here.
-- **Separate AI/BI Lakeview dashboard.** Same reason: the in-app Author View
-  already shows engagement KPIs, per-executive breakdown, low-confidence
-  flagging, and feedback signals. Building a parallel Lakeview dashboard
-  would duplicate work. If a future need calls for surfacing these metrics
-  in Databricks One alongside other org-wide dashboards, a small
-  Lakebase→Delta sync job + Lakeview JSON would be a 1-day add.
-
-## Demo flow (the one Nina walks through)
-
-1. **Author opens the in-app dashboard** at `/author` and sees:
-   - 6 executives viewed the most recent SBAR (the readmission variance one)
-   - 14 questions asked across 5 of those execs
-   - **1 knowledge gap flagged in amber:** the CFO's "What did the Joint
-     Commission say about our discharge protocol in 2023?" returned a
-     low-confidence answer.
-2. **Author clicks the flagged question** and confirms the KA didn't have a
-   2023 Joint Commission report in the corpus.
-3. **Author uploads the 2023 report** to the supplemental_docs volume
-   (`notebooks/04_close_the_gap.py`).
-4. **The Lakeflow Job re-indexes the KA** (or the manual re-index call from
-   notebook 04 fires it immediately).
-5. **An executive asks the same question** — the KA now cites the 2023 report
-   and surfaces the surveyor's recommendation to keep the pharmacist callback
-   program.
+| AI / RAG | Agent Bricks Knowledge Assistant | Grounds chat answers and draft generation on the supplemental_docs corpus |
+| AI / Drafting | Foundation Model (Claude Sonnet) | Drafts new SBARs with the KA exposed as a tool |
+| App | Databricks App (FastAPI) | Two surfaces: executive view (read SBAR + chat) and author view (dashboard + draft authoring) |
+| Audit | Lakebase Postgres | `audit_events` for every interaction, `drafts` for in-flight authoring state |
+| Storage | UC Volumes | `sbar_documents` (published SBARs), `supplemental_docs` (KA corpus), `draft_inputs` (per-draft uploads) |
+| Orchestration | Lakeflow Job | Nightly KA reindex on the supplemental_docs volume |
 
 ## Folder structure
 
 ```
 sbar-briefing-assistant/
+├── databricks.yml                # Asset Bundle root config
+├── resources/                    # Bundle resource definitions
+│   ├── catalog.yml               # Schema + UC volumes
+│   ├── jobs.yml                  # Setup job + nightly KA refresh
+│   └── app.yml                   # Databricks App + resource bindings
 ├── notebooks/
-│   ├── 01_generate_synthetic_content.py      # 4 SBARs + 18 supplemental docs
-│   ├── 02_create_knowledge_assistant.py      # KA setup + source binding
-│   ├── 03_provision_lakebase_audit.py        # PG database + audit_events + seed data
-│   └── 04_close_the_gap.py                   # Demo step: add 2023 report + reindex
+│   ├── 01_generate_synthetic_content.py    # Sample SBARs + supplemental docs
+│   ├── 02_create_knowledge_assistant.py    # KA setup + source binding
+│   ├── 03_provision_lakebase_audit.py      # Postgres schema, audit table, seed data
+│   ├── 04_close_the_gap.py                 # Demo: add missing doc + reindex
+│   └── 05_add_drafts_table.py              # Postgres drafts table migration
 ├── jobs/
-│   └── refresh_ka_index.py                   # Nightly KA reindex job
+│   └── refresh_ka_index.py       # Nightly KA reindex job
 ├── app/
-│   ├── main.py                               # FastAPI entry point
+│   ├── main.py                   # FastAPI entry point
 │   ├── lib/
-│   │   ├── auth.py                           # OBO header parsing (X-Forwarded-*)
-│   │   ├── db.py                             # Lakebase Postgres + REST OAuth
-│   │   └── ka.py                             # KA Responses API client
-│   ├── templates/
-│   │   ├── _layout.html
-│   │   ├── exec.html                         # SBAR + chat
-│   │   └── author.html                       # Author dashboard
+│   │   ├── auth.py               # OBO header parsing (X-Forwarded-*)
+│   │   ├── db.py                 # Lakebase Postgres + REST OAuth fallback
+│   │   ├── ka.py                 # KA Responses API client
+│   │   ├── llm.py                # Agentic draft generator (LLM + tool use)
+│   │   ├── drafts.py             # Drafts CRUD against Lakebase
+│   │   └── notify.py             # Publish notifications (Slack webhook + log)
+│   ├── templates/                # Jinja templates (executive view, author view, draft editor)
 │   ├── static/styles.css
-│   ├── app.yaml                              # Databricks Apps config
+│   ├── app.yaml                  # Databricks Apps runtime config
 │   └── requirements.txt
+├── docs/sample_uploads/          # Sample source documents for the demo
 └── README.md
 ```
 
 ## Prerequisites
 
-- Databricks workspace (Azure: `adb-669602668219382.2.azuredatabricks.net`)
+- Databricks workspace (Azure or AWS), Unity Catalog enabled
 - Databricks CLI v0.230+
 - Local Python 3.11+ with `databricks-sdk>=0.100.0` (for running the
   setup notebooks locally; the Apps runtime SDK is older)
-- Unity Catalog enabled
-- An existing Lakebase Provisioned instance (`hls-lakebase-demo`) — the demo
-  reuses an existing instance to save provisioning time
+- An existing Lakebase Provisioned instance (CU_1 tier is sufficient).
+  The bundle reuses an existing instance rather than creating one.
+- An existing Unity Catalog you own. Catalogs are typically managed at the
+  workspace level rather than by individual app bundles.
 
 ## Deploy via Databricks Asset Bundle
 
 The whole thing is wrapped in a DAB. From a fresh checkout:
 
-### Prerequisites (one-time)
-1. **Catalog**. The bundle assumes the catalog already exists (catalogs are
-   typically managed at workspace level, not by an app bundle). If yours
-   doesn't exist, create it first or update `var.catalog` in `databricks.yml`.
-2. **Lakebase instance**. The bundle reuses an existing Lakebase Provisioned
-   instance — it doesn't create one. Create one in the workspace UI (CU_1
-   tier is fine for the demo) and update `var.lakebase_instance` in
-   `databricks.yml` to its name.
-3. **CLI profile**. Update `targets.dev.workspace.profile` and
-   `targets.prod.workspace.profile` to match your `~/.databrickscfg` profile.
+### Step 1: configure
+Open `databricks.yml` and update these variables to match your workspace:
+- `catalog`: your UC catalog name
+- `lakebase_instance`: your Lakebase Provisioned instance name
+- `author_emails`: comma-separated list of SBAR author emails (used to gate
+  the Author View)
+- Both targets reference a CLI profile (`profile: ...`). Update to your
+  `~/.databrickscfg` profile.
 
-### Deploy
+### Step 2: deploy
+
 ```bash
-# Validate first - catches typos before anything hits the workspace.
 databricks bundle validate -t prod
-
-# Deploy. Creates schema, volumes, jobs, and the App (without source code yet).
 databricks bundle deploy -t prod
-
-# Run the one-shot setup job. Generates synthetic SBARs + supplemental docs,
-# creates the Knowledge Assistant, provisions the Lakebase audit table.
-# Idempotent - safe to re-run.
-databricks bundle run sbar_setup -t prod
-
-# Update KA_ENDPOINT_NAME in app/app.yaml to match the endpoint name
-# the setup job created (printed at the end of notebook 02). Then redeploy:
-databricks bundle deploy -t prod
-
-# Start the App.
-databricks bundle run sbar_briefing_assistant -t prod
 ```
 
-### Post-deploy: grant Postgres privileges on the audit schema
+This creates the UC schema and three volumes, the setup job, the nightly
+refresh job, and the Databricks App with resource bindings.
+
+### Step 3: run the setup job
+
+```bash
+databricks bundle run sbar_setup -t prod
+```
+
+Generates synthetic SBARs and a corpus of supplemental documents into the
+volumes, creates the Knowledge Assistant grounded on the corpus, and
+provisions the Lakebase audit and drafts tables. Idempotent — safe to re-run.
+
+### Step 4: update the KA endpoint name
+
+The setup job creates a new KA endpoint with an auto-generated name (e.g.
+`ka-XXXXXXXX-endpoint`). Open `app/app.yaml`, set `KA_ENDPOINT_NAME` to that
+value, and redeploy:
+
+```bash
+databricks bundle deploy -t prod
+```
+
+### Step 5: grant Postgres privileges to the App SP
+
 The DAB binds Lakebase to the App with `CAN_CONNECT_AND_CREATE`. That lets
 the App connect, but it doesn't grant access to the existing `sbar` schema.
-After the App is created, the App's service principal client_id becomes its
-Postgres role name. Run this once (using a Postgres user that owns the schema):
+The App's service principal `client_id` becomes its Postgres role name
+(visible in the App's settings page). Run this once, using a Postgres user
+that owns the schema:
 
 ```sql
 GRANT USAGE ON SCHEMA sbar TO "<sp_client_id>";
@@ -276,38 +258,58 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA sbar
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "<sp_client_id>";
 ```
 
-### Switch the nightly KA refresh job from PAUSED to UNPAUSED
-The bundle ships the schedule paused so the customer can decide when to
-turn it on. In the Jobs UI, open `sbar-briefing-ka-refresh` and resume the
-schedule. Or edit `resources/jobs.yml` and set `pause_status: UNPAUSED`.
+### Step 6: start the App
 
-### Customizing for your workspace
-All values are bundle variables in `databricks.yml`. Common changes:
+```bash
+databricks bundle run sbar_briefing_assistant -t prod
+```
 
-| Variable | What to update |
+Open the App URL printed by the command. Default landing is the executive
+view of the most recent SBAR.
+
+### Step 7: turn on the nightly KA refresh job
+
+The bundle ships the schedule paused. In the Jobs UI, find the
+`sbar-briefing-ka-refresh` job and resume the schedule. Or edit
+`resources/jobs.yml` and change `pause_status: PAUSED` to `UNPAUSED` before
+the next deploy.
+
+## Configuration
+
+App env vars in `app/app.yaml` (all overridable per environment):
+
+| Var | What it sets |
 |---|---|
-| `catalog` | Your UC catalog name |
-| `lakebase_instance` | Your Lakebase Provisioned instance name |
-| `author_emails` | Comma-separated list of SBAR-author emails |
-| `app_name` | App name (also affects URL) |
+| `KA_ENDPOINT_NAME` | Knowledge Assistant serving endpoint name |
+| `SBAR_VOLUME_PATH` | UC volume of published SBARs |
+| `SUPP_VOLUME_PATH` | UC volume of supplemental grounding docs |
+| `DRAFT_INPUTS_VOLUME_PATH` | UC volume for per-draft uploads |
+| `LLM_MODEL_NAME` | Foundation model used for draft generation |
+| `LAKEBASE_INSTANCE` | Lakebase instance name |
+| `LAKEBASE_PG_DATABASE` | Postgres database name |
+| `LAKEBASE_PG_SCHEMA` | Postgres schema for audit/drafts tables |
+| `AUTHOR_USER_EMAILS` | Comma-separated emails granted access to the Author View |
+| `NOTIFICATION_SLACK_WEBHOOK_URL` | Optional. If set, publish events POST a Slack-formatted payload. Works with Slack and Teams incoming webhooks. |
+| `NOTIFICATION_EXEC_LIST` | Comma-separated executive emails referenced in the notification message |
 
-For prod target, set `targets.prod.workspace.root_path` to a deploy location
-appropriate for your workspace (the default uses
-`${workspace.current_user.userName}` which works for any deployer).
+Auto-injected by the Lakebase resource binding: `PGHOST`, `PGDATABASE`,
+`PGUSER`, `PGPORT`, `PGSSLMODE`. (`PGPASSWORD` is NOT auto-injected; the
+app generates an OAuth token on demand.)
 
 ## Production readiness checklist
 
-This is a working prototype that demonstrates the full closed loop. Before a
-customer rolls it out for real executive briefings, here's the honest list of
-what's built, what's partial, and what would need to be added.
+This is a working reference implementation that demonstrates the full closed
+loop. Before rolling it out for real executive briefings, here's what's
+production-grade today, what's partial, and what would need to be added.
 
-### What's production-grade today
-- **OBO auth via X-Forwarded headers.** Each interaction is attributed to the
-  executive's Databricks identity, not to the App SP. The SP is granted
+### Production-grade today
+- **OBO auth via X-Forwarded headers.** Each interaction is attributed to
+  the executive's Databricks identity, not to the App SP. The SP is granted
   least-privilege scoped permissions.
-- **Async KA polling.** Avoids the ~60s Databricks Apps proxy timeout on long
-  LLM responses by dispatching as background tasks plus client-side polling.
-- **Idempotent setup.** Notebooks 01-05 and the Lakeflow refresh job all
+- **Async LLM polling.** Avoids the ~60s Databricks Apps proxy timeout on
+  long LLM responses by dispatching as background tasks plus client-side
+  polling.
+- **Idempotent setup.** The setup notebooks and Lakeflow refresh job all
   re-run safely.
 - **Bundle-deployable.** `databricks bundle deploy` reproduces every
   resource. Variables for catalog, schema, Lakebase instance, and author
@@ -316,113 +318,86 @@ what's built, what's partial, and what would need to be added.
   signal, and authoring action is in a single Lakebase table.
 - **Closed-loop knowledge gap detection.** Low-confidence KA answers
   (heuristic + the agent's own "I don't have" language) get flagged in the
-  author dashboard and clear out automatically once the missing doc is added
-  to the volume.
+  author dashboard and clear out automatically once the missing doc is
+  added to the volume.
 - **Source verification.** Every cited filename in the SBAR body and in the
-  chat is clickable and opens the source doc inline.
+  chat is clickable and opens the source doc inline in a new tab.
+- **PDF source ingestion.** `pypdf` extracts text from PDF uploads so authors
+  can drag in any source format the org already has.
+- **Publish notifications.** Slack-formatted webhook on publish (works with
+  Slack and Teams). Falls back to log-only if unconfigured. Each notification
+  attempt is recorded in the audit table.
 
-### What's partial - works for the demo, needs hardening for production
+### Partial — works as a reference, needs hardening for production
 
-| Gap | What works today | What's needed for production |
+| Gap | What works today | What's needed |
 |---|---|---|
-| **Source doc access control** | Every executive can see every supplemental doc | Use the executive's OBO token (not the SP's) when serving `/api/source/*` so UC volume permissions apply per-user |
-| **Author UI polish** | Functional textarea editor with auto-save | Rich editor with section anchors (one S/B/A/R section per panel), inline diff after regenerate |
-| **Generation error handling** | Failures land in `generation_failed` status with the error message | Retry with backoff, partial draft recovery, model fallback |
-| **Mobile** | Layout works at desktop sizes | Responsive layout for phones (executives often read briefings on mobile) |
-| **Multi-author** | One author email at a time | Per-author SBAR list view, ownership filters, author-level permissions |
+| Source doc access control | Every executive can see every supplemental doc | Use the executive's OBO token (not the SP's) when serving `/api/source/*` so UC volume permissions apply per-user |
+| Author UI polish | Functional textarea editor with auto-save | Rich editor with section anchors, inline diff after regenerate |
+| Generation error handling | Failures land in `generation_failed` status with the error message | Retry with backoff, partial draft recovery, model fallback |
+| Mobile | Layout works at desktop sizes | Responsive layout for phones |
+| Multi-author | One author email at a time | Per-author SBAR list view, ownership filters, author-level permissions |
+| Draft input retention | Draft uploads stay in the volume forever | Cleanup job that deletes old `published`/`abandoned` draft folders after N days |
 
-### What's NOT built - decide with the customer
+### Not built — decide based on your needs
 
 | Thing | What it is | When you'd add it |
 |---|---|---|
-| **Versioning** | If Nina edits a published SBAR, keep history | If briefings get amended after publish |
-| **Search/filter** | Across the SBAR list | Once the corpus passes ~20-30 SBARs |
-| **Identity outside Databricks** | Today the app uses Databricks workspace identity | If executives aren't workspace users; integrate Microsoft Entra or whatever IdP is in place |
-| **Slides export** | Render an SBAR as a slide deck | If the customer's executives prefer slides over text |
-| **PHI redaction or masking** | Manual review today | If the SBAR is healthcare with real patient data, layer in a redaction pass before publish |
-| **Audit retention policy** | Lakebase table grows unbounded | Set a TTL (e.g. partition by month, archive >12 months to Delta) |
-| **Production telemetry analytics** | In-app dashboard reads Lakebase directly | At scale (thousands of interactions/day), add an SDP medallion: Bronze (Lakebase sync), Silver, Gold + AI/BI Lakeview dashboard |
+| Versioning | Keep history if a published SBAR is amended | If briefings get amended after publish |
+| Search/filter | Across the SBAR list | Once the corpus passes ~20-30 SBARs |
+| Identity outside Databricks | Today the app uses Databricks workspace identity | If executives aren't workspace users; integrate Microsoft Entra or whatever IdP is in place |
+| Slides export | Render an SBAR as a slide deck | If executives prefer slides over text |
+| PHI redaction or masking | Manual review today | If real patient data is involved, layer in a redaction pass before publish |
+| Audit retention policy | Lakebase audit table grows unbounded | Set a TTL (partition by month, archive >12 months to Delta) |
+| Scaled telemetry | In-app dashboard reads Lakebase directly | At scale (thousands of interactions/day), add an SDP medallion (Bronze sync from Lakebase + Silver/Gold) and an AI/BI Lakeview dashboard |
 
-### Suggested first-week production hardening (if customer wants to ship)
+### Suggested first-week production hardening
 
-✅ **Done in this build:**
-- **PDF source ingestion.** `pypdf` extracts text from PDF uploads in
-  `lib/llm.py` so authors can drag in any source format the org already has.
-- **Publish notifications.** `lib/notify.py` sends a Slack-formatted webhook
-  on publish (set `NOTIFICATION_SLACK_WEBHOOK_URL` in `app.yaml` to wire it
-  to a real Slack/Teams channel). Falls back to log-only if unconfigured.
-  Each notification attempt is recorded as a `notification_sent` event in
-  the audit table, so the author can see in the dashboard that publish
-  triggered the broadcast.
+A short list of items most adopters should ship before production rollout:
 
-🔧 **Still to do for a real rollout:**
+1. **OBO source viewing (~30 min).** Wire `/api/source/*` to use the
+   executive's OBO token rather than the App SP for volume reads. Until
+   this lands, every executive sees every supplemental doc regardless of
+   their UC permissions.
+2. **Audit retention policy (~2 hours).** Partition `sbar.audit_events` by
+   month and add an archival job that copies older events to Delta and
+   deletes from Lakebase. Required for HIPAA-bound deployments.
+3. **Compliance review.** Document what data classes are allowed in the
+   volumes, what redaction happens at draft time, who approves before
+   publish, and how long audit data is retained. Output is a one-pager
+   signed by the customer's compliance/legal team.
 
-1. Wire `/api/source/*` to use the executive's OBO token rather than the
-   SP for volume reads. ~30 min of code change. Until this lands, every
-   exec sees every supplemental doc regardless of UC permissions.
-2. Set a Lakebase audit retention policy (partition by month, archive
-   monthly via a job). ~2 hours.
-3. Decide PHI/compliance posture with the customer's compliance team. Output
-   is a one-pager: what data classes are allowed in volumes, what redaction
-   happens at draft time, who approves before publish, audit retention.
-   Time depends on the customer's existing data classification policy.
-
-That's roughly a half-day of code plus a compliance conversation to get
-from "live demo" to "defensible production rollout for a single team of
-executives."
+Roughly half a day of code plus a compliance conversation to go from
+"reference implementation" to "defensible production rollout for a single
+team of executives."
 
 ## Key design choices
 
 - **OBO via X-Forwarded-* headers; SP never an admin.** Each interaction is
   attributed to the executive's Databricks identity, not to the App SP. The
-  SP is granted least-privilege scoped to this demo's resources.
-- **Async KA polling, not sync HTTP.** The Databricks Apps proxy times out
-  around 60 s on long sync responses. The app dispatches KA calls as FastAPI
-  BackgroundTasks and the frontend polls `/api/answer/<question_id>`. Avoids
-  the 504.
+  SP is granted least-privilege scoped to this app's resources.
+- **Async LLM polling, not sync HTTP.** The Databricks Apps proxy times out
+  around 60 s on long sync responses. The app dispatches LLM calls as FastAPI
+  BackgroundTasks and the frontend polls `/api/answer/<question_id>` and
+  `/api/drafts/<id>` for state.
 - **REST fallback for Lakebase credentials.** The Apps runtime SDK lacks
-  `w.database`. The app falls back to a direct `POST /api/2.0/database/credentials`
-  call. Tokens are cached for ~50 min (they last 1 hr).
+  `w.database`. The app falls back to a direct
+  `POST /api/2.0/database/credentials` call. Tokens are cached for ~50 min
+  (they last 1 hr).
 - **Files API for volume reads, not filesystem paths.** Apps don't auto-mount
-  /Volumes paths even with READ_VOLUME. The app uses `w.files.list_directory_contents`
-  and `w.files.download` instead.
-
-## Configuration
-
-App env vars in `app/app.yaml` (most are also overridable via resource bindings):
-
-| Var | Default |
-|---|---|
-| `KA_ENDPOINT_NAME` | `ka-3306ffae-endpoint` |
-| `SBAR_VOLUME_PATH` | `/Volumes/kk_test/sbar_briefing/sbar_documents` |
-| `LAKEBASE_INSTANCE` | `hls-lakebase-demo` |
-| `LAKEBASE_PG_DATABASE` | `sbar_briefing` |
-| `LAKEBASE_PG_SCHEMA` | `sbar` |
-| `AUTHOR_USER_EMAILS` | `kiara.koeppen@databricks.com` |
-
-Auto-injected by the Lakebase resource binding: `PGHOST`, `PGDATABASE`,
-`PGUSER`, `PGPORT`, `PGSSLMODE`. (`PGPASSWORD` is NOT injected — the app
-generates an OAuth token on demand.)
-
-## Comparison to dbdemos generator
-
-This project was built side-by-side with what `dbdemos-generator` produced
-for the same prompt. Key differences in approach:
-
-| Decision | dbdemos generator | This build |
-|---|---|---|
-| Storage of SBAR content | UC volume (markdown) | Same |
-| KA grounding | UC volume of supplemental docs | Same |
-| App framework | Generated via template | Hand-built FastAPI + Jinja |
-| Audit log | SDP Bronze→Silver→Gold to Delta | Lakebase only; in-app analytics |
-| Author dashboard | Lakeview AI/BI dashboard | In-app Author View at `/author` |
-| KA reindex | Lakeflow Job (file-trigger) | Lakeflow Job (cron schedule) |
-
-Trade-offs:
-- dbdemos's SDP + Lakeview path is the "right" architecture at production
-  scale, and shows off more Databricks surface area in a customer demo.
-- This build is leaner — fewer moving parts, fits the actual data volume,
-  and the in-app dashboard renders instantly with no warehouse warm-up.
-- For a customer demo where the conversation will land on
-  "do we really need the SDP pipeline?" — this build's answer is: no, not
-  yet, and here's what you'd add when volume justifies it.
+  `/Volumes` paths even with `READ_VOLUME`. The app uses
+  `w.files.list_directory_contents` and `w.files.download` instead.
+- **Agentic draft generation.** The draft generator is a tool-use loop: the
+  LLM gets a single tool (`search_corpus`) that wraps the existing
+  Knowledge Assistant. The agent decides what to look up based on the
+  author's instruction and uploaded source documents.
+- **Per-draft uploads stay out of the persistent KA index.** Files uploaded
+  to a draft land in a separate UC volume (`draft_inputs/<draft_id>/`)
+  that the KA never sees. The agent reads them during generation, but
+  they're not added to the persistent supplemental corpus. This is
+  deliberate: it prevents one-off draft context (negotiation notes,
+  pre-public vendor pricing, etc.) from becoming queryable forever, and
+  keeps the corpus curated rather than auto-bloating with every upload.
+  If a customer wants source documents to *also* be available to executives
+  in chat, the right pattern is an explicit "promote to corpus" action at
+  publish time (not built today; ~1 hour to add).
